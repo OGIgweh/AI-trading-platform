@@ -1,0 +1,35 @@
+{
+  "expo": {
+    "name": "AI Trading Platform",
+    "slug": "ai-trading-platform",
+    "version": "0.2.0",
+    "orientation": "portrait",
+    "userInterfaceStyle": "automatic",
+    "scheme": "aitrading",
+    "ios": {
+      "supportsTablet": true,
+      "bundleIdentifier": "com.graceigweh.aitradingplatform",
+      "infoPlist": {
+        "NSFaceIDUsageDescription": "Use Face ID to unlock the AI Trading Platform."
+      }
+    },
+    "android": {
+      "package": "com.graceigweh.aitradingplatform",
+      "adaptiveIcon": {
+        "backgroundColor": "#0b1020"
+      },
+      "permissions": [
+        "USE_BIOMETRIC",
+        "USE_FINGERPRINT"
+      ]
+    },
+    "plugins": [
+      "expo-local-authentication",
+      "expo-secure-store",
+      "expo-notifications"
+    ],
+    "extra": {
+      "apiUrl": "https://ai-trading-platform-vdm6.onrender.com/api"
+    }
+  }
+}
