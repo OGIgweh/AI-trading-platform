@@ -64,3 +64,15 @@ npm run dev
 ## Safety
 
 This project is a starter decision-support application. Live trading is blocked by design. Do not use it for real trading without broker integration, data validation, security review, paper-trading validation, and compliance review.
+
+## AI Recommendations Added
+
+This build includes backend-powered recommendation endpoints:
+
+- `POST /api/ai/analyze` - analyzes one ticker and returns CALL, PUT, or NO_TRADE.
+- `GET /api/ai/recommendations` - returns default watchlist recommendations.
+- `POST /api/ai/recommendations` - analyzes a custom watchlist.
+
+The web dashboard now displays a Recent AI Recommendations panel, confidence scores, entry/stop/targets when a setup qualifies, risk notes, and the evidence payload used to generate the decision.
+
+Important: this build still uses sample market data until you connect a real market data provider. Live trading remains disabled.

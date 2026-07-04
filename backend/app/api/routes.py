@@ -1,8 +1,8 @@
 from fastapi import APIRouter, HTTPException
 from app.core.config import settings
-from app.models.schemas import AnalyzeRequest, OrderPreviewRequest, OrderPreview
+from app.models.schemas import AnalyzeRequest, RecommendationsRequest, OrderPreviewRequest, OrderPreview
 from app.services.market_data import get_quote, get_option_chain
-from app.services.ai_engine import analyze_trade
+from app.services.ai_engine import analyze_trade, generate_recommendations
 from app.services.portfolio import get_portfolio_summary
 
 router = APIRouter()
@@ -27,11 +27,19 @@ def market_options(symbol: str):
 def ai_analyze(req: AnalyzeRequest):
     return analyze_trade(req)
 
+@router.post("/ai/recommendations")
+def ai_recommendations(req: RecommendationsRequest):
+    return generate_recommendations(req)
+
+@router.get("/ai/recommendations")
+def ai_recommendations_get():
+    return generate_recommendations(RecommendationsRequest())
+
 @router.post("/orders/preview")
 def order_preview(req: OrderPreviewRequest):
     estimated = req.quantity * (req.limit_price or get_quote(req.symbol).price)
-    return OrderPreview(allowed=False, live_trading_enabled=settings.live_trading_enabled, estimated_cost=round(estimated, 2), message="Live order execution is disabled. This starter only supports safe order preview/paper-mode workflows.")
+    return OrderPreview(allowed=False, live_trading_enabled=settings.live_trading_enabled, estimated_cost=round(estimated, 2), message="Live order execution is disabled. This build supports safe order preview/paper-mode workflows only.")
 
 @router.post("/orders/submit")
 def order_submit():
-    raise HTTPException(status_code=403, detail="Live trading is disabled by design in this starter project.")
+    raise HTTPException(status_code=403, detail="Live trading is disabled by design.")

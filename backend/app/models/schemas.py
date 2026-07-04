@@ -3,9 +3,17 @@ from pydantic import BaseModel, Field
 
 class AnalyzeRequest(BaseModel):
     symbol: str = Field(default="AAPL", min_length=1, max_length=12)
-    account_value: float = 10000
+    account_value: float = Field(default=10000, gt=0)
     strategy: str = "long_call"
-    min_confidence: int = 75
+    min_confidence: int = Field(default=75, ge=1, le=100)
+    max_risk_percent: float = Field(default=1.0, gt=0, le=5)
+
+class RecommendationsRequest(BaseModel):
+    symbols: List[str] = Field(default_factory=lambda: ["AAPL", "MSFT", "NVDA", "SPY", "QQQ"])
+    account_value: float = Field(default=10000, gt=0)
+    min_confidence: int = Field(default=75, ge=1, le=100)
+    max_risk_percent: float = Field(default=1.0, gt=0, le=5)
+    include_no_trade: bool = True
 
 class Quote(BaseModel):
     symbol: str
@@ -46,15 +54,20 @@ class Recommendation(BaseModel):
     confidence: int
     threshold: int
     trade_type: Optional[str] = None
+    direction: Optional[str] = None
+    contract_symbol: Optional[str] = None
     entry_price: Optional[float] = None
     stop_loss: Optional[float] = None
     profit_targets: List[float] = []
     position_size: Optional[int] = None
+    max_risk_dollars: Optional[float] = None
     risk_level: str = "Controlled"
     expected_holding_period: str = "1-5 trading days"
     explanation: str
     risks: List[str]
+    invalidation_conditions: List[str] = []
     evidence: Dict[str, Any]
+    data_quality: str = "sample"
 
 class OrderPreviewRequest(BaseModel):
     symbol: str
