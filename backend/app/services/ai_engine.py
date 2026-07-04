@@ -33,8 +33,8 @@ def analyze_trade(req: AnalyzeRequest) -> Recommendation:
     risks = []
     missing = []
 
-    if quote.data_source == "sample":
-        risks.append("Using sample market data. Connect a live data provider before relying on this for real trades.")
+    if quote.data_source == "sample" or tech.get("data_source") == "sample" or market.get("data_source") == "sample":
+        risks.append("Some required data is still sample/fallback data. Configure a live provider and verify data quality before relying on this for real trades.")
     if quote.price <= 0:
         missing.append("valid quote price")
     if not chain:
@@ -46,7 +46,7 @@ def analyze_trade(req: AnalyzeRequest) -> Recommendation:
         return Recommendation(
             symbol=symbol, recommendation="NO_TRADE", confidence=0, threshold=threshold,
             explanation="NO TRADE RECOMMENDED because required evidence is missing: " + ", ".join(missing) + ".",
-            risks=["Incomplete evidence can cause unsafe recommendations."], evidence={"missing": missing}, data_quality=quote.data_source
+            risks=["Incomplete evidence can cause unsafe recommendations."], evidence={"missing": missing}, data_quality="live_delayed" if quote.data_source != "sample" and tech.get("data_source") != "sample" and market.get("data_source") != "sample" else "sample_or_partial"
         )
 
     strategy = req.strategy.lower()
@@ -61,7 +61,7 @@ def analyze_trade(req: AnalyzeRequest) -> Recommendation:
         return Recommendation(
             symbol=symbol, recommendation="NO_TRADE", confidence=0, threshold=threshold,
             explanation=f"NO TRADE RECOMMENDED because no {direction} contract was available for analysis.",
-            risks=["Options chain incomplete."], evidence={"options_count": len(chain)}, data_quality=quote.data_source
+            risks=["Options chain incomplete."], evidence={"options_count": len(chain)}, data_quality="live_delayed" if quote.data_source != "sample" and tech.get("data_source") != "sample" and market.get("data_source") != "sample" else "sample_or_partial"
         )
 
     spread = bid_ask_spread_pct(contract.bid, contract.ask)
@@ -85,11 +85,12 @@ def analyze_trade(req: AnalyzeRequest) -> Recommendation:
     options_score += 25 if contract.open_interest >= MIN_OPEN_INTEREST else 8
     options_score += 20 if 0.20 <= contract.implied_volatility <= 0.65 else 10
     market_score = market.get("score", 0)
-    risk_score = 90 if len([r for r in risks if "sample market data" not in r]) == 0 else 50
+    risk_score = 90 if len([r for r in risks if "sample/fallback" not in r]) == 0 else 50
     confidence = round((technical_score * 0.35) + (options_score * 0.30) + (market_score * 0.15) + (risk_score * 0.20))
 
-    hard_risk_failures = [r for r in risks if "sample market data" not in r]
-    qualifies = confidence >= threshold and not hard_risk_failures
+    data_quality = "live_delayed" if quote.data_source != "sample" and tech.get("data_source") != "sample" and market.get("data_source") != "sample" else "sample_or_partial"
+    hard_risk_failures = list(risks)
+    qualifies = data_quality == "live_delayed" and confidence >= threshold and not hard_risk_failures
     recommendation = direction if qualifies else "NO_TRADE"
 
     stop_loss = round(mid * 0.75, 2) if qualifies else None
@@ -127,7 +128,7 @@ def analyze_trade(req: AnalyzeRequest) -> Recommendation:
     else:
         explanation = (
             "NO TRADE RECOMMENDED because confidence is below threshold or one or more risk filters failed. "
-            "Capital preservation takes priority over trade frequency."
+            f"Capital preservation takes priority over trade frequency. Data quality: {data_quality}."
         )
 
     return Recommendation(
@@ -154,7 +155,7 @@ def analyze_trade(req: AnalyzeRequest) -> Recommendation:
             "Unexpected news or earnings risk appears."
         ],
         evidence=evidence,
-        data_quality=quote.data_source,
+        data_quality=data_quality,
     )
 
 
