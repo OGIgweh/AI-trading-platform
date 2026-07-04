@@ -4,7 +4,7 @@ from pydantic import BaseModel, Field
 class AnalyzeRequest(BaseModel):
     symbol: str = Field(default="AAPL", min_length=1, max_length=12)
     account_value: float = Field(default=10000, gt=0)
-    strategy: str = "long_call"
+    strategy: str = "auto"
     min_confidence: int = Field(default=75, ge=1, le=100)
     max_risk_percent: float = Field(default=1.0, gt=0, le=5)
 
@@ -48,6 +48,25 @@ class PortfolioSummary(BaseModel):
     market_sentiment: str
     ai_confidence_level: int
 
+class EvidenceItem(BaseModel):
+    category: str
+    name: str
+    value: Any
+    signal: str = Field(description="bullish, bearish, neutral, pass, fail, warning, info")
+    score: int = Field(default=0, ge=-100, le=100)
+    weight: float = Field(default=0)
+    passed: bool = False
+    explanation: str
+    data_source: str = "unknown"
+
+class ScoreBreakdown(BaseModel):
+    technical_score: int = 0
+    options_score: int = 0
+    market_score: int = 0
+    risk_score: int = 0
+    final_confidence: int = 0
+    threshold: int = 75
+
 class Recommendation(BaseModel):
     symbol: str
     recommendation: str
@@ -66,8 +85,10 @@ class Recommendation(BaseModel):
     explanation: str
     risks: List[str]
     invalidation_conditions: List[str] = []
-    evidence: Dict[str, Any]
-    data_quality: str = "sample"
+    evidence: List[EvidenceItem] = []
+    score_breakdown: ScoreBreakdown = Field(default_factory=ScoreBreakdown)
+    raw_data: Dict[str, Any] = {}
+    data_quality: str = "unverified"
 
 class OrderPreviewRequest(BaseModel):
     symbol: str
