@@ -1,12 +1,13 @@
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import datetime
 from functools import lru_cache
 from typing import Any
 
 from app.core.config import settings
 from app.models.schemas import Quote, OptionContract
 from app.services.risk import bid_ask_spread_pct
+from app.services.market_clock import market_status
 
 SAMPLE_QUOTES = {
     "AAPL": {"price": 214.35, "change": 1.26, "change_percent": 0.59, "volume": 58234000},
@@ -27,14 +28,8 @@ def _sample_quote(symbol: str) -> Quote:
 
 
 def _market_status() -> str:
-    # Simple US market-hours approximation using UTC. This is intentionally conservative.
-    now = datetime.now(timezone.utc)
-    if now.weekday() >= 5:
-        return "CLOSED"
-    # 9:30am-4:00pm Eastern = 13:30-20:00 UTC during daylight saving; 14:30-21:00 standard.
-    # Use a broad window so the UI can show OPEN during normal market hours.
-    minutes = now.hour * 60 + now.minute
-    return "OPEN" if (13 * 60 + 30) <= minutes <= (21 * 60) else "CLOSED"
+    # Accurate regular-session status based on NYSE calendar in America/New_York.
+    return market_status()
 
 
 def _safe_float(value: Any, default: float = 0.0) -> float:

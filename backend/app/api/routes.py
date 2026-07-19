@@ -4,6 +4,7 @@ from app.models.schemas import AnalyzeRequest, RecommendationsRequest, OrderPrev
 from app.services.market_data import get_quote, get_option_chain
 from app.services.ai_engine import analyze_trade, generate_recommendations
 from app.services.portfolio import get_portfolio_summary
+from app.services.market_clock import market_status_detail
 
 router = APIRouter()
 
@@ -14,6 +15,11 @@ def health():
 @router.get("/portfolio/summary")
 def portfolio_summary():
     return get_portfolio_summary()
+
+
+@router.get("/market/status")
+def market_clock_status():
+    return market_status_detail()
 
 @router.get("/market/quote/{symbol}")
 def market_quote(symbol: str):
