@@ -18,6 +18,7 @@ import {
   DollarSign,
   Layers3,
   RefreshCw,
+  Search as SearchIcon,
   ShieldCheck,
   TrendingUp,
 } from 'lucide-react';
@@ -27,8 +28,12 @@ import {
   quote,
   options,
   recommendations,
+  searchStocks,
 } from './lib/api';
 import './style.css';
+
+const DEFAULT_SYMBOLS = ['AAPL', 'MSFT', 'NVDA', 'SPY', 'QQQ'];
+const WATCHLIST_STORAGE_KEY = 'ai-trading-platform-symbols';
 
 const perf = [
   { d: 'Mon', v: 10000 },
@@ -405,6 +410,18 @@ function SuggestedOrderTicket({ rec, currentQuote }) {
 function App() {
   const [portfolio, setPortfolio] = useState(null);
   const [symbol, setSymbol] = useState('AAPL');
+  const [searchTerm, setSearchTerm] = useState('AAPL');
+  const [searchResults, setSearchResults] = useState([]);
+  const [searching, setSearching] = useState(false);
+  const [searchOpen, setSearchOpen] = useState(false);
+  const [watchSymbols, setWatchSymbols] = useState(() => {
+    try {
+      const saved = JSON.parse(localStorage.getItem(WATCHLIST_STORAGE_KEY) || '[]');
+      return Array.isArray(saved) && saved.length ? saved.slice(0, 20) : DEFAULT_SYMBOLS;
+    } catch {
+      return DEFAULT_SYMBOLS;
+    }
+  });
   const [rec, setRec] = useState(null);
   const [currentQuote, setCurrentQuote] = useState(null);
   const [chain, setChain] = useState([]);
@@ -417,12 +434,38 @@ function App() {
     refreshAll();
   }, []);
 
+  useEffect(() => {
+    localStorage.setItem(WATCHLIST_STORAGE_KEY, JSON.stringify(watchSymbols));
+  }, [watchSymbols]);
+
+  useEffect(() => {
+    const query = searchTerm.trim();
+    if (!query) {
+      setSearchResults([]);
+      setSearching(false);
+      return undefined;
+    }
+    const timer = window.setTimeout(async () => {
+      setSearching(true);
+      try {
+        const data = await searchStocks(query);
+        setSearchResults(data.results || []);
+      } catch {
+        setSearchResults([]);
+      } finally {
+        setSearching(false);
+      }
+    }, 350);
+    return () => window.clearTimeout(timer);
+  }, [searchTerm]);
+
   async function refreshAll() {
     setLoading(true);
     setError('');
     try {
-      await run('AAPL');
-      const data = await recommendations();
+      const symbols = watchSymbols.length ? watchSymbols : DEFAULT_SYMBOLS;
+      await run(symbols[0], false);
+      const data = await recommendations(symbols);
       setRecs(data.recommendations || []);
     } catch (err) {
       setError(err.message || 'Unable to refresh recommendations.');
@@ -431,10 +474,17 @@ function App() {
     }
   }
 
-  async function run(requestedSymbol = symbol) {
-    const clean = requestedSymbol.toUpperCase().trim();
+  function rememberSymbol(clean) {
+    setWatchSymbols((previous) => [clean, ...previous.filter((item) => item !== clean)].slice(0, 20));
+  }
+
+  async function run(requestedSymbol = searchTerm || symbol, manageLoading = true) {
+    const clean = String(requestedSymbol || '').toUpperCase().trim();
     if (!clean) return;
+    if (manageLoading) setLoading(true);
     setSymbol(clean);
+    setSearchTerm(clean);
+    setSearchOpen(false);
     setError('');
     try {
       const [quoteData, chainData, recommendationData] = await Promise.all([
@@ -445,9 +495,56 @@ function App() {
       setCurrentQuote(quoteData);
       setChain(chainData);
       setRec(recommendationData);
+      rememberSymbol(clean);
+      setRecs((previous) => [
+        recommendationData,
+        ...previous.filter((item) => item.symbol !== clean),
+      ].slice(0, 20));
     } catch (err) {
+      setCurrentQuote(null);
+      setChain([]);
+      setRec(null);
       setError(err.message || `Unable to analyze ${clean}.`);
+    } finally {
+      if (manageLoading) setLoading(false);
     }
+  }
+
+  function chooseSearchResult(result) {
+    setSearchTerm(result.symbol);
+    setSearchOpen(false);
+    run(result.symbol);
+  }
+
+  async function analyzeSearchTerm() {
+    const raw = searchTerm.trim();
+    const typed = raw.toUpperCase();
+    if (!raw) return;
+
+    let candidates = searchResults;
+    if (!candidates.length) {
+      try {
+        setSearching(true);
+        const data = await searchStocks(raw);
+        candidates = data.results || [];
+        setSearchResults(candidates);
+      } catch {
+        candidates = [];
+      } finally {
+        setSearching(false);
+      }
+    }
+
+    const exact = candidates.find((item) => item.symbol === typed);
+    if (exact) {
+      chooseSearchResult(exact);
+      return;
+    }
+    if (candidates.length) {
+      chooseSearchResult(candidates[0]);
+      return;
+    }
+    run(typed);
   }
 
   return (
@@ -496,23 +593,76 @@ function App() {
         </Card>
 
         <Card title="AI Trading Assistant" className="assistantCard">
-          <div className="search">
-            <input
-              value={symbol}
-              onChange={(event) => setSymbol(event.target.value.toUpperCase())}
-              onKeyDown={(event) => event.key === 'Enter' && run()}
-              aria-label="Ticker symbol"
-            />
-            <button onClick={() => run()} disabled={loading}>Analyze</button>
-            <button
-              className="iconButton"
-              onClick={refreshAll}
-              title="Refresh recommendations"
-              disabled={loading}
-            >
-              <RefreshCw size={16} className={loading ? 'spin' : ''} />
-            </button>
+          <div className="symbolSearchArea">
+            <div className="search">
+              <div className="searchInputWrap">
+                <SearchIcon size={18} aria-hidden="true" />
+                <input
+                  value={searchTerm}
+                  onChange={(event) => {
+                    setSearchTerm(event.target.value);
+                    setSearchResults([]);
+                    setSearchOpen(true);
+                  }}
+                  onFocus={() => setSearchOpen(true)}
+                  onKeyDown={(event) => {
+                    if (event.key === 'Enter') {
+                      event.preventDefault();
+                      analyzeSearchTerm();
+                    }
+                    if (event.key === 'Escape') setSearchOpen(false);
+                  }}
+                  placeholder="Search ticker or company name"
+                  aria-label="Search any stock or ETF by ticker or company name"
+                  aria-autocomplete="list"
+                  aria-expanded={searchOpen}
+                />
+                {searching && <RefreshCw size={16} className="spin searchSpinner" aria-label="Searching" />}
+              </div>
+              <button onClick={analyzeSearchTerm} disabled={loading || !searchTerm.trim()}>Analyze</button>
+              <button
+                className="iconButton"
+                onClick={refreshAll}
+                title="Refresh saved symbols"
+                disabled={loading}
+              >
+                <RefreshCw size={16} className={loading ? 'spin' : ''} />
+              </button>
+            </div>
+
+            {searchOpen && searchTerm.trim() && (
+              <div className="searchResults" role="listbox" aria-label="Stock search results">
+                {searching && !searchResults.length && <div className="searchStatus">Searching market symbols…</div>}
+                {!searching && !searchResults.length && (
+                  <div className="searchStatus">No matching supported stock or ETF found yet. You can still submit an exact ticker.</div>
+                )}
+                {searchResults.map((result) => (
+                  <button
+                    type="button"
+                    className="searchResult"
+                    key={`${result.symbol}-${result.exchange}`}
+                    onMouseDown={(event) => event.preventDefault()}
+                    onClick={() => chooseSearchResult(result)}
+                    role="option"
+                  >
+                    <span className="searchSymbol">{result.symbol}</span>
+                    <span className="searchCompany">{result.name}</span>
+                    <span className="searchMeta">{result.exchange} · {result.quote_type}</span>
+                  </button>
+                ))}
+              </div>
+            )}
           </div>
+
+          <div className="symbolChips" aria-label="Recently analyzed symbols">
+            <span>Saved:</span>
+            {watchSymbols.slice(0, 10).map((item) => (
+              <button key={item} onClick={() => run(item)} className={item === symbol ? 'active' : ''}>
+                {item}
+              </button>
+            ))}
+          </div>
+          <p className="searchHelp">Search by ticker (such as TSLA or BRK-B) or by company name. Valid symbols are analyzed with the same technical, options, market-context, and risk rules.</p>
 
           {currentQuote && (
             <div className="quoteSummary">
@@ -574,7 +724,7 @@ function App() {
       </section>
 
       <section className="grid two">
-        <Card title="Recent AI Recommendations">
+        <Card title="Saved & Recent AI Recommendations">
           <div className="recList">
             {loading && <p>Loading recommendations...</p>}
             {recs.map((recommendation) => (

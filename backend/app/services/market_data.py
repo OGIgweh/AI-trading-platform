@@ -5,7 +5,7 @@ from functools import lru_cache
 from typing import Any
 
 from app.core.config import settings
-from app.models.schemas import Quote, OptionContract
+from app.models.schemas import Quote, OptionContract, InstrumentSearchResult
 from app.services.risk import bid_ask_spread_pct
 from app.services.market_clock import market_status
 
@@ -16,6 +16,69 @@ SAMPLE_QUOTES = {
     "SPY": {"price": 624.91, "change": 0.84, "change_percent": 0.13, "volume": 74523000},
     "QQQ": {"price": 556.40, "change": 1.10, "change_percent": 0.20, "volume": 39120000},
 }
+
+
+_ALLOWED_SEARCH_TYPES = {"EQUITY", "ETF"}
+
+
+def _clean_symbol(symbol: str) -> str:
+    return symbol.upper().strip()
+
+
+@lru_cache(maxsize=256)
+def _yf_search_cached(query: str, limit: int, cache_bucket: int) -> list[InstrumentSearchResult]:
+    del cache_bucket
+    try:
+        import yfinance as yf
+
+        search = yf.Search(query, max_results=max(1, min(limit, 12)), news_count=0)
+        raw_quotes = list(search.quotes or [])
+        results: list[InstrumentSearchResult] = []
+        seen: set[str] = set()
+        for item in raw_quotes:
+            symbol = _clean_symbol(str(item.get("symbol", "")))
+            quote_type = str(item.get("quoteType") or item.get("typeDisp") or "").upper()
+            if not symbol or symbol in seen or quote_type not in _ALLOWED_SEARCH_TYPES:
+                continue
+            name = str(
+                item.get("longname")
+                or item.get("shortname")
+                or item.get("name")
+                or symbol
+            )
+            exchange = str(
+                item.get("exchDisp")
+                or item.get("exchange")
+                or item.get("fullExchangeName")
+                or "Unknown"
+            )
+            results.append(InstrumentSearchResult(
+                symbol=symbol,
+                name=name,
+                exchange=exchange,
+                quote_type=quote_type,
+                currency=item.get("currency"),
+                market_state=item.get("marketState"),
+                has_options=item.get("hasOptions"),
+            ))
+            seen.add(symbol)
+            if len(results) >= limit:
+                break
+        return results
+    except Exception:
+        return []
+
+
+def search_instruments(query: str, limit: int = 8) -> list[InstrumentSearchResult]:
+    """Search supported equities/ETFs by ticker or company name.
+
+    Search results are provider-backed; this function never invents symbols.
+    """
+    clean = query.strip()
+    if not clean or not _provider_enabled():
+        return []
+    bucket = int(datetime.now().timestamp() // max(60, settings.market_data_cache_seconds * 5))
+    return _yf_search_cached(clean, max(1, min(limit, 12)), bucket)
 
 
 def _provider_enabled() -> bool:
@@ -86,13 +149,24 @@ def _yf_quote_cached(symbol: str, cache_bucket: int) -> Quote | None:
 
 
 def get_quote(symbol: str) -> Quote:
-    symbol = symbol.upper().strip()
+    symbol = _clean_symbol(symbol)
+    if settings.market_data_provider.lower() == "sample":
+        return _sample_quote(symbol)
     if _provider_enabled():
         bucket = int(datetime.now().timestamp() // max(15, settings.market_data_cache_seconds))
         live = _yf_quote_cached(symbol, bucket)
         if live:
             return live
-    return _sample_quote(symbol)
+    # Never fabricate a quote for an arbitrary user-entered ticker.
+    return Quote(
+        symbol=symbol,
+        price=0.0,
+        change=0.0,
+        change_percent=0.0,
+        volume=0,
+        market_status=_market_status(),
+        data_source="unavailable",
+    )
 
 
 def _premium(price: float, strike: float, contract_type: str, i: int):
@@ -204,10 +278,14 @@ def _yf_option_chain_cached(symbol: str, cache_bucket: int) -> list[OptionContra
 
 
 def get_option_chain(symbol: str) -> list[OptionContract]:
-    symbol = symbol.upper().strip()
+    symbol = _clean_symbol(symbol)
+    if settings.market_data_provider.lower() == "sample":
+        return _sample_option_chain(symbol)
     if _provider_enabled():
         bucket = int(datetime.now().timestamp() // max(60, settings.market_data_cache_seconds * 3))
         live = _yf_option_chain_cached(symbol, bucket)
         if live:
             return live
-    return _sample_option_chain(symbol)
+    # An empty chain is intentional: non-optionable symbols or unavailable data
+    # must produce NO_TRADE rather than a fabricated options contract.
+    return []

@@ -3,7 +3,7 @@ from pydantic import BaseModel, Field
 
 
 class AnalyzeRequest(BaseModel):
-    symbol: str = Field(default="AAPL", min_length=1, max_length=12)
+    symbol: str = Field(default="AAPL", min_length=1, max_length=24)
     account_value: float = Field(default=10000, gt=0)
     strategy: str = "auto"
     min_confidence: int = Field(default=75, ge=1, le=100)
@@ -16,6 +16,17 @@ class RecommendationsRequest(BaseModel):
     min_confidence: int = Field(default=75, ge=1, le=100)
     max_risk_percent: float = Field(default=1.0, gt=0, le=5)
     include_no_trade: bool = True
+
+
+class InstrumentSearchResult(BaseModel):
+    symbol: str
+    name: str
+    exchange: str = "Unknown"
+    quote_type: str = "EQUITY"
+    currency: Optional[str] = None
+    market_state: Optional[str] = None
+    has_options: Optional[bool] = None
+    data_source: str = "yfinance_search"
 
 
 class Quote(BaseModel):

@@ -80,3 +80,5 @@ Important: this build still uses sample market data until you connect a real mar
 ## Broker-Entry Options Ticket
 
 Qualified CALL/PUT recommendations now include a structured `suggested_order` object and a mobile-friendly broker-entry ticket in the AI Trading Assistant. It displays Action, Quantity, Expiration, Strike, Call/Put, Bid/Mid/Ask, Order Type, Limit Price, Timing, Special Instructions, estimated amount, contract symbol, and the suggested exit plan. NO TRADE decisions never generate an order ticket.
+
+- Search and analyze any provider-supported stock or ETF by ticker or company name.

@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from app.models.schemas import AnalyzeRequest, RecommendationsRequest, Recommendation, ScoreBreakdown, SuggestedOptionsOrder
+from app.models.schemas import AnalyzeRequest, RecommendationsRequest, Recommendation, ScoreBreakdown, SuggestedOptionsOrder, EvidenceItem
 from app.services.market_data import get_quote, get_option_chain
 from app.services.indicators import technical_snapshot, market_context_snapshot
 from app.services.risk import position_contracts
@@ -47,6 +47,28 @@ def analyze_trade(req: AnalyzeRequest) -> Recommendation:
     symbol = req.symbol.upper().strip()
     threshold = req.min_confidence
     quote = get_quote(symbol)
+    if quote.data_source == "unavailable" or quote.price <= 0:
+        evidence = [EvidenceItem(
+            category="Data Quality",
+            name="Verified market quote",
+            value="Unavailable",
+            signal="fail",
+            score=-100,
+            weight=1.0,
+            passed=False,
+            explanation=f"No verified quote was returned for {symbol}. The symbol may be invalid, unsupported, delisted, or temporarily unavailable.",
+            data_source="yfinance_delayed",
+        )]
+        return _no_trade(
+            symbol,
+            threshold,
+            "NO TRADE RECOMMENDED because a verified market quote could not be retrieved. The platform does not substitute sample prices for user-entered symbols.",
+            ["Search for the company and select a supported ticker before retrying."],
+            evidence,
+            {"quote": quote.model_dump(), "technical": {"data_source": "unavailable"}, "market_context": {}, "options_contract_count": 0},
+            ScoreBreakdown(threshold=threshold),
+        )
+
     tech = technical_snapshot(symbol)
     market = market_context_snapshot()
     chain = get_option_chain(symbol)
@@ -171,7 +193,9 @@ def analyze_trade(req: AnalyzeRequest) -> Recommendation:
 
 def generate_recommendations(req: RecommendationsRequest):
     results = []
-    for symbol in req.symbols:
+    # Bound batch work to protect the free market-data provider and API service.
+    unique_symbols = list(dict.fromkeys(s.upper().strip() for s in req.symbols if s.strip()))[:20]
+    for symbol in unique_symbols:
         rec = analyze_trade(AnalyzeRequest(
             symbol=symbol,
             account_value=req.account_value,

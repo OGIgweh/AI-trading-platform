@@ -2,11 +2,21 @@ const API = import.meta.env.VITE_API_URL || 'https://ai-trading-platform-vdm6.on
 
 async function request(path, options) {
   const res = await fetch(`${API}${path}`, options);
-  if (!res.ok) throw new Error(`API error ${res.status}`);
+  if (!res.ok) {
+    let message = `API error ${res.status}`;
+    try {
+      const payload = await res.json();
+      message = payload.detail || payload.message || message;
+    } catch {
+      // Keep the status-based fallback when a non-JSON response is returned.
+    }
+    throw new Error(message);
+  }
   return res.json();
 }
 
 export function getPortfolio() { return request('/portfolio/summary'); }
+export function searchStocks(query, limit = 8) { return request(`/market/search?q=${encodeURIComponent(query)}&limit=${limit}`); }
 export function quote(symbol) { return request(`/market/quote/${encodeURIComponent(symbol)}`); }
 export function options(symbol) { return request(`/market/options/${encodeURIComponent(symbol)}`); }
 export function analyze(symbol, strategy = 'long_call') {
