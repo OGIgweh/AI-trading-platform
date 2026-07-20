@@ -1,5 +1,6 @@
-from typing import List, Dict, Optional, Any
+from typing import List, Dict, Optional, Any, Literal
 from pydantic import BaseModel, Field
+
 
 class AnalyzeRequest(BaseModel):
     symbol: str = Field(default="AAPL", min_length=1, max_length=12)
@@ -8,12 +9,14 @@ class AnalyzeRequest(BaseModel):
     min_confidence: int = Field(default=75, ge=1, le=100)
     max_risk_percent: float = Field(default=1.0, gt=0, le=5)
 
+
 class RecommendationsRequest(BaseModel):
     symbols: List[str] = Field(default_factory=lambda: ["AAPL", "MSFT", "NVDA", "SPY", "QQQ"])
     account_value: float = Field(default=10000, gt=0)
     min_confidence: int = Field(default=75, ge=1, le=100)
     max_risk_percent: float = Field(default=1.0, gt=0, le=5)
     include_no_trade: bool = True
+
 
 class Quote(BaseModel):
     symbol: str
@@ -23,6 +26,7 @@ class Quote(BaseModel):
     volume: int
     market_status: str
     data_source: str = "sample"
+
 
 class OptionContract(BaseModel):
     symbol: str
@@ -38,6 +42,9 @@ class OptionContract(BaseModel):
     theta: float
     vega: float
     spread_percent: float
+    expiration: Optional[str] = None
+    days_to_expiration: Optional[int] = None
+
 
 class PortfolioSummary(BaseModel):
     total_value: float
@@ -47,6 +54,7 @@ class PortfolioSummary(BaseModel):
     market_status: str
     market_sentiment: str
     ai_confidence_level: int
+
 
 class EvidenceItem(BaseModel):
     category: str
@@ -59,6 +67,7 @@ class EvidenceItem(BaseModel):
     explanation: str
     data_source: str = "unknown"
 
+
 class ScoreBreakdown(BaseModel):
     technical_score: int = 0
     options_score: int = 0
@@ -66,6 +75,40 @@ class ScoreBreakdown(BaseModel):
     risk_score: int = 0
     final_confidence: int = 0
     threshold: int = 75
+
+
+class SuggestedOptionsOrder(BaseModel):
+    """A broker-entry-ready view of the qualified options recommendation.
+
+    This is intentionally separate from order execution. It maps the engine's
+    selected contract to the fields a user sees in a typical brokerage ticket.
+    """
+
+    asset_class: Literal["OPTIONS"] = "OPTIONS"
+    strategy: str
+    underlying_symbol: str
+    underlying_price: float
+    leg_count: int = 1
+    action: Literal["BUY_TO_OPEN"] = "BUY_TO_OPEN"
+    quantity: int
+    expiration: str
+    days_to_expiration: Optional[int] = None
+    strike: float
+    option_type: Literal["CALL", "PUT"]
+    contract_symbol: str
+    bid: float
+    mid: float
+    ask: float
+    order_type: Literal["LIMIT"] = "LIMIT"
+    limit_price: float
+    timing: Literal["DAY"] = "DAY"
+    special_instructions: Literal["NONE"] = "NONE"
+    estimated_amount: float
+    estimated_max_loss: float
+    price_basis: str = "Midpoint of current bid/ask"
+    review_required: bool = True
+    live_submission_enabled: bool = False
+
 
 class Recommendation(BaseModel):
     symbol: str
@@ -77,18 +120,20 @@ class Recommendation(BaseModel):
     contract_symbol: Optional[str] = None
     entry_price: Optional[float] = None
     stop_loss: Optional[float] = None
-    profit_targets: List[float] = []
+    profit_targets: List[float] = Field(default_factory=list)
     position_size: Optional[int] = None
     max_risk_dollars: Optional[float] = None
     risk_level: str = "Controlled"
     expected_holding_period: str = "1-5 trading days"
     explanation: str
-    risks: List[str]
-    invalidation_conditions: List[str] = []
-    evidence: List[EvidenceItem] = []
+    risks: List[str] = Field(default_factory=list)
+    invalidation_conditions: List[str] = Field(default_factory=list)
+    evidence: List[EvidenceItem] = Field(default_factory=list)
     score_breakdown: ScoreBreakdown = Field(default_factory=ScoreBreakdown)
-    raw_data: Dict[str, Any] = {}
+    suggested_order: Optional[SuggestedOptionsOrder] = None
+    raw_data: Dict[str, Any] = Field(default_factory=dict)
     data_quality: str = "unverified"
+
 
 class OrderPreviewRequest(BaseModel):
     symbol: str
@@ -96,6 +141,7 @@ class OrderPreviewRequest(BaseModel):
     quantity: int
     order_type: str = "limit"
     limit_price: Optional[float] = None
+
 
 class OrderPreview(BaseModel):
     allowed: bool

@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, date, timedelta
 from functools import lru_cache
 from typing import Any
 
@@ -118,11 +118,13 @@ def _sample_option_chain(symbol: str) -> list[OptionContract]:
         for t in ["CALL", "PUT"]:
             bid, ask = _premium(q.price, strike, t, i)
             spread_pct = bid_ask_spread_pct(bid, ask)
+            sample_expiration = date.today() + timedelta(days=30)
             rows.append(OptionContract(
                 symbol=f"{q.symbol}-{t}-{strike}", contract_type=t, strike=float(strike), bid=bid, ask=ask,
                 volume=900 + i * 250, open_interest=2200 + i * 700, implied_volatility=0.24 + i * 0.015,
                 delta=round((0.55 - i * 0.04) if t == "CALL" else (-0.45 + i * 0.04), 2),
-                gamma=0.02, theta=-0.04, vega=0.12, spread_percent=spread_pct
+                gamma=0.02, theta=-0.04, vega=0.12, spread_percent=spread_pct,
+                expiration=sample_expiration.isoformat(), days_to_expiration=30,
             ))
     return rows
 
@@ -137,10 +139,27 @@ def _yf_option_chain_cached(symbol: str, cache_bucket: int) -> list[OptionContra
         expirations = list(ticker.options or [])
         if not expirations:
             return []
-        # Use the nearest expiration with available data.
+
+        # Prefer a liquid swing-trade window instead of blindly selecting the
+        # nearest expiration (which may be same-day/next-day and materially
+        # riskier). The engine targets 14-45 DTE when the chain provides it.
+        today = date.today()
+        dated_expirations = []
+        for expiration in expirations:
+            try:
+                exp_date = datetime.strptime(expiration, "%Y-%m-%d").date()
+                dte = (exp_date - today).days
+                if dte >= 0:
+                    dated_expirations.append((expiration, dte))
+            except ValueError:
+                continue
+        preferred = [item for item in dated_expirations if 14 <= item[1] <= 45]
+        fallback = [item for item in dated_expirations if item[1] >= 7]
+        selected_expirations = preferred[:2] or fallback[:2] or dated_expirations[:1]
+
         rows: list[OptionContract] = []
         q = get_quote(symbol)
-        for expiration in expirations[:3]:
+        for expiration, days_to_expiration in selected_expirations:
             chain = ticker.option_chain(expiration)
             for contract_type, df in [("CALL", chain.calls), ("PUT", chain.puts)]:
                 if df is None or df.empty:
@@ -172,6 +191,8 @@ def _yf_option_chain_cached(symbol: str, cache_bucket: int) -> list[OptionContra
                         theta=0.0,
                         vega=0.0,
                         spread_percent=bid_ask_spread_pct(bid, ask),
+                        expiration=expiration,
+                        days_to_expiration=days_to_expiration,
                     ))
             if rows:
                 break

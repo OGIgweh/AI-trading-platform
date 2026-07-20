@@ -76,3 +76,7 @@ This build includes backend-powered recommendation endpoints:
 The web dashboard now displays a Recent AI Recommendations panel, confidence scores, entry/stop/targets when a setup qualifies, risk notes, and the evidence payload used to generate the decision.
 
 Important: this build still uses sample market data until you connect a real market data provider. Live trading remains disabled.
+
+## Broker-Entry Options Ticket
+
+Qualified CALL/PUT recommendations now include a structured `suggested_order` object and a mobile-friendly broker-entry ticket in the AI Trading Assistant. It displays Action, Quantity, Expiration, Strike, Call/Put, Bid/Mid/Ask, Order Type, Limit Price, Timing, Special Instructions, estimated amount, contract symbol, and the suggested exit plan. NO TRADE decisions never generate an order ticket.

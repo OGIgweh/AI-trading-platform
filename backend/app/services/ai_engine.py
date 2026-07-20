@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from app.models.schemas import AnalyzeRequest, RecommendationsRequest, Recommendation, ScoreBreakdown
+from app.models.schemas import AnalyzeRequest, RecommendationsRequest, Recommendation, ScoreBreakdown, SuggestedOptionsOrder
 from app.services.market_data import get_quote, get_option_chain
 from app.services.indicators import technical_snapshot, market_context_snapshot
 from app.services.risk import position_contracts
@@ -118,6 +118,25 @@ def analyze_trade(req: AnalyzeRequest) -> Recommendation:
 
     stop_loss = round(mid * 0.75, 2)
     targets = [round(mid * 1.25, 2), round(mid * 1.50, 2)]
+    estimated_amount = round(contracts * mid * 100, 2)
+    suggested_order = SuggestedOptionsOrder(
+        strategy="Long Call" if direction == "CALL" else "Long Put",
+        underlying_symbol=symbol,
+        underlying_price=quote.price,
+        action="BUY_TO_OPEN",
+        quantity=contracts,
+        expiration=contract.expiration or "Unavailable",
+        days_to_expiration=contract.days_to_expiration,
+        strike=contract.strike,
+        option_type=direction,
+        contract_symbol=contract.symbol,
+        bid=contract.bid,
+        mid=mid,
+        ask=contract.ask,
+        limit_price=mid,
+        estimated_amount=estimated_amount,
+        estimated_max_loss=estimated_amount,
+    )
     return Recommendation(
         symbol=symbol,
         recommendation=direction,
@@ -144,6 +163,7 @@ def analyze_trade(req: AnalyzeRequest) -> Recommendation:
         ],
         evidence=all_evidence,
         score_breakdown=breakdown,
+        suggested_order=suggested_order,
         raw_data=raw_data | {"selected_contract": contract.model_dump() if contract else None},
         data_quality="verified_live_delayed",
     )
