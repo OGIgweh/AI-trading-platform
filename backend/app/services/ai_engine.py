@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from app.models.schemas import AnalyzeRequest, RecommendationsRequest, Recommendation, ScoreBreakdown, SuggestedOptionsOrder, EvidenceItem
-from app.services.market_data import get_quote, get_option_chain
+from app.services.market_data import get_quote, get_option_chain, normalize_symbol
 from app.services.indicators import technical_snapshot, market_context_snapshot
 from app.services.risk import position_contracts
 from app.services.scoring_engine import score_technical, score_options, score_market, score_risk
@@ -44,28 +44,48 @@ def _no_trade(symbol: str, threshold: int, explanation: str, risks: list[str], e
 
 
 def analyze_trade(req: AnalyzeRequest) -> Recommendation:
-    symbol = req.symbol.upper().strip()
+    symbol = normalize_symbol(req.symbol)
     threshold = req.min_confidence
     quote = get_quote(symbol)
-    if quote.data_source == "unavailable" or quote.price <= 0:
+    if quote.data_source != "yfinance_delayed" or quote.price <= 0:
+        provider_issue = quote.data_source == "provider_unavailable"
+        invalid_format = quote.data_source == "invalid_symbol"
+        if provider_issue:
+            explanation = (
+                f"The market-data provider could not return a verified quote for {symbol}. "
+                "This is a temporary provider/rate-limit condition and does not mean the ticker is nonexistent."
+            )
+            risk = "Retry after the provider recovers; do not place a trade using stale or missing data."
+        elif invalid_format:
+            explanation = f"{symbol or req.symbol} is not in a supported ticker format."
+            risk = "Enter a ticker such as AAPL, BRK-B, or 7203.T."
+        else:
+            explanation = f"No supported stock or ETF could be verified for {symbol}."
+            risk = "Confirm the exact exchange ticker before retrying."
+
         evidence = [EvidenceItem(
             category="Data Quality",
             name="Verified market quote",
-            value="Unavailable",
+            value=quote.data_source,
             signal="fail",
             score=-100,
             weight=1.0,
             passed=False,
-            explanation=f"No verified quote was returned for {symbol}. The symbol may be invalid, unsupported, delisted, or temporarily unavailable.",
-            data_source="yfinance_delayed",
+            explanation=explanation,
+            data_source=quote.data_source,
         )]
         return _no_trade(
             symbol,
             threshold,
-            "NO TRADE RECOMMENDED because a verified market quote could not be retrieved. The platform does not substitute sample prices for user-entered symbols.",
-            ["Search for the company and select a supported ticker before retrying."],
+            f"NO TRADE RECOMMENDED. {explanation}",
+            [risk],
             evidence,
-            {"quote": quote.model_dump(), "technical": {"data_source": "unavailable"}, "market_context": {}, "options_contract_count": 0},
+            {
+                "quote": quote.model_dump(),
+                "technical": {"data_source": quote.data_source},
+                "market_context": {},
+                "options_contract_count": 0,
+            },
             ScoreBreakdown(threshold=threshold),
         )
 
@@ -194,7 +214,7 @@ def analyze_trade(req: AnalyzeRequest) -> Recommendation:
 def generate_recommendations(req: RecommendationsRequest):
     results = []
     # Bound batch work to protect the free market-data provider and API service.
-    unique_symbols = list(dict.fromkeys(s.upper().strip() for s in req.symbols if s.strip()))[:20]
+    unique_symbols = list(dict.fromkeys(normalize_symbol(s) for s in req.symbols if s.strip()))[:20]
     for symbol in unique_symbols:
         rec = analyze_trade(AnalyzeRequest(
             symbol=symbol,

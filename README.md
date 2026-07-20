@@ -82,3 +82,7 @@ Important: this build still uses sample market data until you connect a real mar
 Qualified CALL/PUT recommendations now include a structured `suggested_order` object and a mobile-friendly broker-entry ticket in the AI Trading Assistant. It displays Action, Quantity, Expiration, Strike, Call/Put, Bid/Mid/Ask, Order Type, Limit Price, Timing, Special Instructions, estimated amount, contract symbol, and the suggested exit plan. NO TRADE decisions never generate an order ticket.
 
 - Search and analyze any provider-supported stock or ETF by ticker or company name.
+
+## Resilient Universal Ticker Search
+
+The current build treats autocomplete as optional. Exact ticker entries are independently verified through multiple delayed Yahoo Finance data paths with retries. Temporary provider failures return a provider-unavailable/NO-TRADE state instead of falsely claiming that a valid ticker does not exist. Common class-share and international ticker formats are supported, including `BRK.B`, `BRK-B`, `7203.T`, and `SHOP.TO`.

@@ -9,9 +9,10 @@ class Settings(BaseSettings):
     # Market data configuration
     # "yfinance" = free delayed market data best-effort provider.
     # "sample" = deterministic demo data.
-    # "auto" = try yfinance, then fall back to sample.
+    # "auto" = use yfinance with retries; never substitute sample values for live analysis.
     market_data_provider: str = "auto"
     market_data_cache_seconds: int = 60
+    market_data_retries: int = 2
 
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
 

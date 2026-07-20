@@ -25,9 +25,7 @@ import {
 import {
   getPortfolio,
   analyze,
-  quote,
   options,
-  recommendations,
   searchStocks,
 } from './lib/api';
 import './style.css';
@@ -463,12 +461,12 @@ function App() {
     setLoading(true);
     setError('');
     try {
-      const symbols = watchSymbols.length ? watchSymbols : DEFAULT_SYMBOLS;
-      await run(symbols[0], false);
-      const data = await recommendations(symbols);
-      setRecs(data.recommendations || []);
+      // Refresh only the selected ticker. Automatically analyzing every saved
+      // symbol on page load can trigger free-provider rate limits and make
+      // valid tickers appear unavailable.
+      await run(searchTerm || symbol || DEFAULT_SYMBOLS[0], false);
     } catch (err) {
-      setError(err.message || 'Unable to refresh recommendations.');
+      setError(err.message || 'Unable to refresh the current analysis.');
     } finally {
       setLoading(false);
     }
@@ -487,18 +485,29 @@ function App() {
     setSearchOpen(false);
     setError('');
     try {
-      const [quoteData, chainData, recommendationData] = await Promise.all([
-        quote(clean),
-        options(clean),
-        analyze(clean, 'auto'),
-      ]);
+      // Analyze first. The analysis response already contains the verified quote,
+      // which avoids three simultaneous Yahoo requests for the same ticker.
+      const recommendationData = await analyze(clean, 'auto');
+      const quoteData = recommendationData?.raw_data?.quote || null;
+      let chainData = [];
+
+      // Fetch the table after analysis so a temporary options-chain failure does
+      // not erase a valid quote or the engine's transparent NO_TRADE decision.
+      if (Number(quoteData?.price) > 0) {
+        try {
+          chainData = await options(recommendationData.symbol || clean);
+        } catch {
+          chainData = [];
+        }
+      }
+
       setCurrentQuote(quoteData);
       setChain(chainData);
       setRec(recommendationData);
-      rememberSymbol(clean);
+      if (Number(quoteData?.price) > 0) rememberSymbol(recommendationData.symbol || clean);
       setRecs((previous) => [
         recommendationData,
-        ...previous.filter((item) => item.symbol !== clean),
+        ...previous.filter((item) => item.symbol !== recommendationData.symbol),
       ].slice(0, 20));
     } catch (err) {
       setCurrentQuote(null);
@@ -540,6 +549,18 @@ function App() {
       chooseSearchResult(exact);
       return;
     }
+
+    // An uppercase/punctuated value is treated as an intentional ticker even
+    // when autocomplete returns a different company. Lowercase company-name
+    // searches continue to select the best provider result.
+    const tickerShape = /^[A-Z0-9^][A-Z0-9.^=\/-]{0,23}$/;
+    const explicitTicker = tickerShape.test(typed)
+      && (raw === raw.toUpperCase() || /[.^=\/-]/.test(raw));
+    if (explicitTicker) {
+      run(typed);
+      return;
+    }
+
     if (candidates.length) {
       chooseSearchResult(candidates[0]);
       return;
@@ -623,7 +644,7 @@ function App() {
               <button
                 className="iconButton"
                 onClick={refreshAll}
-                title="Refresh saved symbols"
+                title="Refresh current analysis"
                 disabled={loading}
               >
                 <RefreshCw size={16} className={loading ? 'spin' : ''} />
@@ -634,7 +655,7 @@ function App() {
               <div className="searchResults" role="listbox" aria-label="Stock search results">
                 {searching && !searchResults.length && <div className="searchStatus">Searching market symbols…</div>}
                 {!searching && !searchResults.length && (
-                  <div className="searchStatus">No matching supported stock or ETF found yet. You can still submit an exact ticker.</div>
+                  <div className="searchStatus">Autocomplete found no company match. Exact ticker entry still works and will be verified independently.</div>
                 )}
                 {searchResults.map((result) => (
                   <button
