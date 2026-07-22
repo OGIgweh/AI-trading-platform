@@ -99,3 +99,30 @@ summary{padding:10px 0;color:#dbeafe;font-weight:850}summary:hover{color:#67d4ff
 
 @media(max-width:1000px){.metrics{grid-template-columns:repeat(2,1fr)}.two{grid-template-columns:1fr}.primaryGrid>.assistantCard{grid-row:1}.underlyingStrip{grid-template-columns:repeat(2,1fr)}}
 @media(max-width:640px){main{padding:14px}header{align-items:flex-start;gap:12px;flex-direction:column}.metrics{grid-template-columns:1fr}.card{padding:14px;border-radius:17px}.search{display:grid;grid-template-columns:minmax(0,1fr) auto auto}.searchResults{top:54px}.searchResult{grid-template-columns:70px minmax(0,1fr)}.searchMeta{grid-column:2}.symbolChips{max-height:72px;overflow:auto}.recommendationHeader{align-items:flex-start}.orderTicketTop{display:grid}.paperOnlyBadge{justify-self:start}.underlyingStrip{grid-template-columns:1fr 1fr}.legPanel{margin:10px}.ticketRow{padding:11px 12px}.ticketLabel>span{font-size:15px}.ticketValueWrap strong{font-size:15px;max-width:185px}.optionToggle{min-width:170px}.quoteStrip{gap:4px}.quoteStrip>div{display:grid;text-align:center;gap:3px}.exitPlan{grid-template-columns:1fr 1fr;padding:12px}.estimatedAmount{align-items:stretch;flex-direction:column}.copyTicketButton{width:100%}.scoreGrid{grid-template-columns:1fr 1fr}.quoteSummary{align-items:center}.assistantCard{padding:12px}.trade,.noTrade{padding:11px;border-left-width:4px}}
+
+
+.analysisHealth {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.55rem;
+  margin: 0.9rem 0 1rem;
+}
+
+.analysisHealth span {
+  border: 1px solid rgba(148, 163, 184, 0.28);
+  background: rgba(15, 23, 42, 0.52);
+  border-radius: 999px;
+  padding: 0.38rem 0.68rem;
+  font-size: 0.78rem;
+  color: #cbd5e1;
+}
+
+.analysisHealth span.verified {
+  border-color: rgba(34, 197, 94, 0.5);
+  color: #86efac;
+}
+
+.analysisHealth span.unavailable {
+  border-color: rgba(245, 158, 11, 0.55);
+  color: #fcd34d;
+}

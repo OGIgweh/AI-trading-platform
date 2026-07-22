@@ -21,6 +21,21 @@ SAMPLE_QUOTES = {
 
 _ALLOWED_SEARCH_TYPES = {"EQUITY", "ETF"}
 _SYMBOL_PATTERN = re.compile(r"^[A-Z0-9^][A-Z0-9.^=\-]{0,23}$")
+_VALID_HISTORY_PERIODS = {"1d", "5d", "1mo", "3mo", "6mo", "1y", "2y", "5y", "10y", "ytd", "max"}
+
+
+def normalize_history_period(period: str) -> str:
+    """Return a yfinance-supported history period.
+
+    The provider does not support arbitrary values such as ``9mo``. Invalid
+    values are deliberately mapped to one year so the indicator engine has
+    enough daily bars for EMA, RSI, MACD, ATR, and Bollinger calculations.
+    """
+
+    clean = str(period or "").strip().lower()
+    return clean if clean in _VALID_HISTORY_PERIODS else "1y"
+
+
 _TRANSIENT_ERROR_MARKERS = (
     "timeout",
     "timed out",
@@ -479,7 +494,7 @@ def search_instruments(query: str, limit: int = 8) -> list[InstrumentSearchResul
     return search_instruments_with_status(query, limit)[0]
 
 
-def get_price_history(symbol: str, period: str = "9mo", interval: str = "1d"):
+def get_price_history(symbol: str, period: str = "1y", interval: str = "1d"):
     """Retrieve verified OHLCV history with retries and symbol aliases.
 
     Returns ``(dataframe, canonical_symbol, status)`` where status is one of
@@ -487,6 +502,7 @@ def get_price_history(symbol: str, period: str = "9mo", interval: str = "1d"):
     """
 
     normalized = normalize_symbol(symbol)
+    provider_period = normalize_history_period(period)
     if not is_valid_symbol_format(normalized) or not _provider_enabled():
         return None, normalized, "invalid_format"
 
@@ -501,7 +517,7 @@ def get_price_history(symbol: str, period: str = "9mo", interval: str = "1d"):
     for candidate in symbol_candidates(normalized):
         try:
             frame = yf.Ticker(candidate).history(
-                period=period,
+                period=provider_period,
                 interval=interval,
                 auto_adjust=False,
                 repair=True,
@@ -516,7 +532,7 @@ def get_price_history(symbol: str, period: str = "9mo", interval: str = "1d"):
         try:
             frame = yf.download(
                 candidate,
-                period=period,
+                period=provider_period,
                 interval=interval,
                 auto_adjust=False,
                 repair=True,

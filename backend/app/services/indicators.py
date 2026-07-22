@@ -73,11 +73,13 @@ def _macd(close):
 @lru_cache(maxsize=512)
 def _technical_cached(symbol: str, cache_bucket: int):
     del cache_bucket
-    frame, canonical_symbol, status = get_price_history(symbol, period="9mo", interval="1d")
+    frame, canonical_symbol, status = get_price_history(symbol, period="1y", interval="1d")
     if status != "ok" or frame is None or frame.empty:
         return {
             "symbol": normalize_symbol(symbol),
             "data_source": status,
+            "history_period": "1y",
+            "history_bars": 0,
             "error": (
                 "Market-data provider is temporarily unavailable."
                 if status == "provider_unavailable"
@@ -91,6 +93,8 @@ def _technical_cached(symbol: str, cache_bucket: int):
         return {
             "symbol": canonical_symbol,
             "data_source": "insufficient_history",
+            "history_period": "1y",
+            "history_bars": int(len(close)),
             "error": "At least 60 daily price bars are required for indicator analysis.",
         }
 
@@ -154,6 +158,8 @@ def _technical_cached(symbol: str, cache_bucket: int):
         "volume": volume,
         "avg_volume_20": round(average_volume_20),
         "volume_ratio": volume_ratio,
+        "history_period": "1y",
+        "history_bars": int(len(frame)),
         "data_source": "yfinance_delayed",
     }
 

@@ -716,6 +716,15 @@ function App() {
               </div>
 
               <p>{rec.explanation}</p>
+              <div className="analysisHealth" aria-label="Analysis data status">
+                <span className={rec.raw_data?.technical?.data_source === 'yfinance_delayed' ? 'verified' : 'unavailable'}>
+                  Technical data: {rec.raw_data?.technical?.data_source || 'unavailable'}
+                </span>
+                <span>History: {rec.raw_data?.technical?.history_bars ?? 0} daily bars</span>
+                <span>Period: {rec.raw_data?.technical?.history_period || '—'}</span>
+                <span>Options contracts: {rec.raw_data?.options_contract_count ?? 0}</span>
+                <span>Quote source: {currentQuote?.data_source || rec.raw_data?.quote?.data_source || 'unavailable'}</span>
+              </div>
               <SuggestedOrderTicket rec={rec} currentQuote={currentQuote} />
 
               {rec.risks?.length > 0 && (

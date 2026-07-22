@@ -111,8 +111,31 @@ def analyze_trade(req: AnalyzeRequest) -> Recommendation:
         direction = inferred_direction
 
     if direction == "NO_TRADE":
-        breakdown = ScoreBreakdown(technical_score=technical_score, options_score=0, market_score=0, risk_score=0, final_confidence=0, threshold=threshold)
-        return _no_trade(symbol, threshold, "NO TRADE RECOMMENDED because the technical engine could not infer a clear bullish or bearish direction from verified evidence.", hard_failures or ["Direction is unclear."], all_evidence, raw_data, breakdown)
+        technical_verified = tech.get("data_source") == "yfinance_delayed"
+        displayed_confidence = technical_score if technical_verified else 0
+        breakdown = ScoreBreakdown(
+            technical_score=technical_score,
+            options_score=0,
+            market_score=0,
+            risk_score=0,
+            final_confidence=displayed_confidence,
+            threshold=threshold,
+        )
+        if technical_verified:
+            explanation = (
+                "NO TRADE RECOMMENDED because the verified technical indicators are mixed or "
+                "balanced; neither a bullish nor bearish direction has enough independent support."
+            )
+            reasons = hard_failures or [
+                "Bullish and bearish technical evidence is too closely balanced to qualify a direction."
+            ]
+        else:
+            explanation = (
+                "NO TRADE RECOMMENDED because verified historical OHLCV data could not be loaded, "
+                "so EMA, RSI, MACD, VWAP, ATR, and Bollinger analysis could not be completed."
+            )
+            reasons = hard_failures or [tech.get("error", "Verified price history is unavailable.")]
+        return _no_trade(symbol, threshold, explanation, reasons, all_evidence, raw_data, breakdown)
 
     contract = _best_contract(chain, direction, req.account_value, req.max_risk_percent)
     options_score, options_evidence, options_failures, options_warnings = score_options(contract, direction)
