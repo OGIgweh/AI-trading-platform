@@ -186,6 +186,8 @@ def _history_to_quote(symbol: str, hist: Any) -> Quote | None:
             return None
         change = price - prev_close
         change_percent = (change / prev_close * 100) if prev_close else 0
+        as_of_value = hist.index[-1]
+        as_of = as_of_value.isoformat() if hasattr(as_of_value, "isoformat") else str(as_of_value)
         return Quote(
             symbol=symbol,
             price=round(price, 2),
@@ -194,22 +196,23 @@ def _history_to_quote(symbol: str, hist: Any) -> Quote | None:
             volume=_safe_int(last.get("Volume"), 0),
             market_status=_market_status(),
             data_source="yfinance_delayed",
+            as_of=as_of,
+            previous_close=round(prev_close, 2),
+            day_low=round(_safe_float(last.get("Low"), price), 2),
+            day_high=round(_safe_float(last.get("High"), price), 2),
         )
     except Exception:
         return None
 
-
 def _fast_info_to_quote(symbol: str, ticker: Any) -> Quote | None:
     try:
         info = ticker.fast_info
-        price = _safe_float(info.get("last_price") if hasattr(info, "get") else info["last_price"])
+        getter = info.get if hasattr(info, "get") else lambda key, default=None: info[key]
+        price = _safe_float(getter("last_price"))
         if price <= 0:
             return None
-        previous = _safe_float(
-            info.get("previous_close") if hasattr(info, "get") else info["previous_close"],
-            price,
-        )
-        volume = _safe_int(info.get("last_volume") if hasattr(info, "get") else info["last_volume"], 0)
+        previous = _safe_float(getter("previous_close"), price)
+        volume = _safe_int(getter("last_volume"), 0)
         change = price - previous
         return Quote(
             symbol=symbol,
@@ -219,10 +222,15 @@ def _fast_info_to_quote(symbol: str, ticker: Any) -> Quote | None:
             volume=volume,
             market_status=_market_status(),
             data_source="yfinance_delayed",
+            as_of=datetime.now().astimezone().isoformat(),
+            previous_close=round(previous, 2),
+            day_low=round(_safe_float(getter("day_low"), price), 2),
+            day_high=round(_safe_float(getter("day_high"), price), 2),
+            fifty_two_week_low=round(_safe_float(getter("year_low"), 0), 2) or None,
+            fifty_two_week_high=round(_safe_float(getter("year_high"), 0), 2) or None,
         )
     except Exception:
         return None
-
 
 def _info_to_quote(symbol: str, ticker: Any) -> Quote | None:
     try:
@@ -233,6 +241,8 @@ def _info_to_quote(symbol: str, ticker: Any) -> Quote | None:
         previous = _safe_float(info.get("regularMarketPreviousClose") or info.get("previousClose"), price)
         volume = _safe_int(info.get("regularMarketVolume") or info.get("volume"), 0)
         change = price - previous
+        timestamp = info.get("regularMarketTime")
+        as_of = datetime.fromtimestamp(timestamp).astimezone().isoformat() if timestamp else datetime.now().astimezone().isoformat()
         return Quote(
             symbol=symbol,
             price=round(price, 2),
@@ -241,10 +251,15 @@ def _info_to_quote(symbol: str, ticker: Any) -> Quote | None:
             volume=volume,
             market_status=_market_status(),
             data_source="yfinance_delayed",
+            as_of=as_of,
+            previous_close=round(previous, 2),
+            day_low=round(_safe_float(info.get("regularMarketDayLow") or info.get("dayLow"), price), 2),
+            day_high=round(_safe_float(info.get("regularMarketDayHigh") or info.get("dayHigh"), price), 2),
+            fifty_two_week_low=round(_safe_float(info.get("fiftyTwoWeekLow"), 0), 2) or None,
+            fifty_two_week_high=round(_safe_float(info.get("fiftyTwoWeekHigh"), 0), 2) or None,
         )
     except Exception:
         return None
-
 
 def _exact_search_state(yf: Any, symbol: str) -> bool | None:
     """Return True if search confirms the exact ticker, False if not, None on provider failure."""
@@ -549,6 +564,82 @@ def get_price_history(symbol: str, period: str = "1y", interval: str = "1d"):
 
     return None, normalized, "provider_unavailable" if transient else "not_found"
 
+
+
+def get_chart_history(symbol: str, period: str = "1y") -> dict[str, Any]:
+    """Return chart-ready daily closing prices and summary ranges.
+
+    The latest completed bar remains available when the market is closed.
+    """
+    requested_period = normalize_history_period(period)
+    frame, canonical, status = get_price_history(symbol, requested_period, "1d")
+    if status != "ok" or frame is None or frame.empty:
+        return {
+            "symbol": canonical,
+            "period": requested_period,
+            "status": status,
+            "market_status": _market_status(),
+            "as_of": None,
+            "points": [],
+            "summary": {},
+        }
+
+    try:
+        clean = frame.dropna(subset=["Close"]).copy()
+        points = []
+        for index, row in clean.iterrows():
+            timestamp = index.isoformat() if hasattr(index, "isoformat") else str(index)
+            points.append({
+                "date": timestamp,
+                "close": round(_safe_float(row.get("Close")), 4),
+                "open": round(_safe_float(row.get("Open")), 4),
+                "high": round(_safe_float(row.get("High")), 4),
+                "low": round(_safe_float(row.get("Low")), 4),
+                "volume": _safe_int(row.get("Volume"), 0),
+            })
+        last = clean.iloc[-1]
+        last_close = _safe_float(last.get("Close"))
+        first_close = _safe_float(clean.iloc[0].get("Close"), last_close)
+        period_change = last_close - first_close
+        period_change_percent = (period_change / first_close * 100) if first_close else 0
+        as_of_value = clean.index[-1]
+        as_of = as_of_value.isoformat() if hasattr(as_of_value, "isoformat") else str(as_of_value)
+
+        # Pull a year for the 52-week range even when the visible chart is shorter.
+        range_frame = clean
+        if requested_period not in {"1y", "2y", "5y", "10y", "max"}:
+            yearly, _, yearly_status = get_price_history(canonical, "1y", "1d")
+            if yearly_status == "ok" and yearly is not None and not yearly.empty:
+                range_frame = yearly.dropna(subset=["Close"])
+
+        return {
+            "symbol": canonical,
+            "period": requested_period,
+            "status": "ok",
+            "market_status": _market_status(),
+            "as_of": as_of,
+            "points": points,
+            "summary": {
+                "last_price": round(last_close, 2),
+                "period_change": round(period_change, 2),
+                "period_change_percent": round(period_change_percent, 2),
+                "period_low": round(_safe_float(clean["Low"].min()), 2),
+                "period_high": round(_safe_float(clean["High"].max()), 2),
+                "fifty_two_week_low": round(_safe_float(range_frame["Low"].min()), 2),
+                "fifty_two_week_high": round(_safe_float(range_frame["High"].max()), 2),
+                "volume": _safe_int(last.get("Volume"), 0),
+            },
+        }
+    except Exception:
+        return {
+            "symbol": canonical,
+            "period": requested_period,
+            "status": "provider_unavailable",
+            "market_status": _market_status(),
+            "as_of": None,
+            "points": [],
+            "summary": {},
+        }
 
 def _sample_quote(symbol: str) -> Quote:
     raw = SAMPLE_QUOTES.get(symbol, {"price": 100.0, "change": 0.0, "change_percent": 0.0, "volume": 1_000_000})

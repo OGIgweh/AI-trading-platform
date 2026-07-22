@@ -19,6 +19,9 @@ export function getPortfolio() { return request('/portfolio/summary'); }
 export function searchStocks(query, limit = 8) { return request(`/market/search?q=${encodeURIComponent(query)}&limit=${limit}`); }
 export function quote(symbol) { return request(`/market/quote/${encodeURIComponent(symbol)}`); }
 export function options(symbol) { return request(`/market/options/${encodeURIComponent(symbol)}`); }
+export function history(symbol, period = '1y') {
+  return request(`/market/history/${encodeURIComponent(symbol)}?period=${encodeURIComponent(period)}`);
+}
 export function analyze(symbol, strategy = 'long_call') {
   return request('/ai/analyze', {
     method: 'POST',

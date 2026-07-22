@@ -126,3 +126,40 @@ summary{padding:10px 0;color:#dbeafe;font-weight:850}summary:hover{color:#67d4ff
   border-color: rgba(245, 158, 11, 0.55);
   color: #fcd34d;
 }
+
+
+/* Selected ticker market summary and history chart */
+.priceChartCard{display:flex;flex-direction:column;gap:12px}
+.chartHeader{display:flex;justify-content:space-between;align-items:flex-start;gap:12px}
+.chartHeader>div{display:flex;flex-direction:column;gap:3px}
+.chartHeader strong{font-size:30px}
+.chartHeader>div>span{font-weight:800}
+.marketState{display:inline-flex;align-items:center;border:1px solid #334155;border-radius:999px;padding:7px 11px;font-size:12px;font-weight:900;letter-spacing:.05em;background:#0a1224}
+.marketState.open{border-color:rgba(34,197,94,.6);color:#86efac!important}
+.marketState.closed{border-color:rgba(245,158,11,.55);color:#fbbf24!important}
+.marketClosedNotice{padding:10px 12px;border:1px solid rgba(245,158,11,.35);background:rgba(245,158,11,.08);border-radius:11px;color:#f4d58a;font-size:13px;line-height:1.4}
+.chartPeriods{display:grid;grid-template-columns:repeat(5,1fr);border:1px solid #34415d;border-radius:12px;overflow:hidden;background:#0a1020}
+.chartPeriods button{border:0;border-right:1px solid #34415d;border-radius:0;padding:10px 6px;background:transparent;color:#b9c5df;font-weight:800}
+.chartPeriods button:last-child{border-right:0}
+.chartPeriods button:hover,.chartPeriods button:focus-visible{background:#17233e;color:white;transform:none}
+.chartPeriods button.active{background:#59627a;color:white}
+.chartStatus{min-height:280px;display:grid;place-items:center;margin:0;color:#9aa9c5}
+.rangeGrid{display:grid;grid-template-columns:repeat(4,1fr);gap:8px;border-top:1px solid var(--border);padding-top:12px}
+.rangeGrid div{display:flex;flex-direction:column;gap:3px;padding:8px;background:#0a1020;border-radius:9px}
+.rangeGrid span{font-size:11px;text-transform:uppercase;letter-spacing:.05em}
+.rangeGrid b{font-size:14px}
+.detailedQuote{display:block}
+.quotePrimary{display:flex;justify-content:space-between;align-items:flex-start;gap:12px;margin-bottom:12px}
+.quotePrimary>div{display:flex;align-items:baseline;gap:12px;flex-wrap:wrap}
+.quotePrimary .lastPrice{font-size:25px;color:#f2f7ff!important;font-weight:850}
+.quotePrimary>span{font-weight:850}
+.quoteFacts{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px}
+.quoteFacts>span{display:flex;flex-direction:column;gap:2px;padding:9px;background:#0c1427;border-radius:9px;min-width:0}
+.quoteFacts small{font-size:10px;text-transform:uppercase;letter-spacing:.05em;color:#8292b1}
+.quoteFacts b{font-size:13px;overflow-wrap:anywhere}
+.lastAvailableMessage{margin:10px 0 0;padding:9px 11px;border-left:3px solid var(--warning);background:rgba(245,158,11,.08);border-radius:7px;color:#e8d5a0;font-size:12px}
+@media(max-width:720px){
+  .rangeGrid{grid-template-columns:repeat(2,1fr)}
+  .quoteFacts{grid-template-columns:repeat(2,minmax(0,1fr))}
+  .chartHeader strong{font-size:25px}
+}

@@ -8,6 +8,7 @@ from app.services.market_data import (
     get_option_chain,
     get_quote,
     get_quote_lookup,
+    get_chart_history,
     search_instruments_with_status,
 )
 from app.services.portfolio import get_portfolio_summary
@@ -62,6 +63,21 @@ def market_quote(symbol: str):
     if lookup.status == "not_found":
         raise HTTPException(status_code=404, detail=lookup.message)
     return lookup.quote
+
+
+@router.get("/market/history/{symbol}")
+def market_history(
+    symbol: str,
+    period: str = Query(default="1y", pattern="^(1d|5d|1mo|3mo|6mo|1y|2y|5y|10y|ytd|max)$"),
+):
+    result = get_chart_history(symbol, period)
+    if result["status"] == "invalid_format":
+        raise HTTPException(status_code=422, detail="Ticker format is invalid.")
+    if result["status"] == "not_found":
+        raise HTTPException(status_code=404, detail=f"No price history was found for {symbol.upper().strip()}.")
+    if result["status"] == "provider_unavailable":
+        raise HTTPException(status_code=503, detail="Price history is temporarily unavailable from the market-data provider.")
+    return result
 
 
 @router.get("/market/options/{symbol}")

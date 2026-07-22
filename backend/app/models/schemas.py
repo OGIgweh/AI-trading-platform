@@ -37,6 +37,12 @@ class Quote(BaseModel):
     volume: int
     market_status: str
     data_source: str = "sample"
+    as_of: Optional[str] = None
+    previous_close: Optional[float] = None
+    day_low: Optional[float] = None
+    day_high: Optional[float] = None
+    fifty_two_week_low: Optional[float] = None
+    fifty_two_week_high: Optional[float] = None
 
 
 class OptionContract(BaseModel):

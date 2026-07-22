@@ -26,6 +26,7 @@ import {
   getPortfolio,
   analyze,
   options,
+  history,
   searchStocks,
 } from './lib/api';
 import './style.css';
@@ -33,13 +34,7 @@ import './style.css';
 const DEFAULT_SYMBOLS = ['AAPL', 'MSFT', 'NVDA', 'SPY', 'QQQ'];
 const WATCHLIST_STORAGE_KEY = 'ai-trading-platform-symbols';
 
-const perf = [
-  { d: 'Mon', v: 10000 },
-  { d: 'Tue', v: 10080 },
-  { d: 'Wed', v: 9940 },
-  { d: 'Thu', v: 10110 },
-  { d: 'Fri', v: 10126 },
-];
+const CHART_PERIODS = ['1mo', '3mo', '6mo', '1y', '5y'];
 
 const money = (value) => {
   const parsed = Number(value);
@@ -57,6 +52,22 @@ const formatDate = (value) => {
     day: 'numeric',
     year: 'numeric',
   });
+};
+
+const formatAsOf = (value) => {
+  if (!value) return 'Unavailable';
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return value;
+  return date.toLocaleString(undefined, {
+    month: 'short', day: 'numeric', year: 'numeric',
+    hour: 'numeric', minute: '2-digit',
+  });
+};
+
+const compactDate = (value) => {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return value;
+  return date.toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
 };
 
 function Card({ title, children, icon, className = '' }) {
@@ -423,6 +434,9 @@ function App() {
   const [rec, setRec] = useState(null);
   const [currentQuote, setCurrentQuote] = useState(null);
   const [chain, setChain] = useState([]);
+  const [chartData, setChartData] = useState(null);
+  const [chartPeriod, setChartPeriod] = useState('1y');
+  const [chartLoading, setChartLoading] = useState(false);
   const [recs, setRecs] = useState([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
@@ -476,6 +490,26 @@ function App() {
     setWatchSymbols((previous) => [clean, ...previous.filter((item) => item !== clean)].slice(0, 20));
   }
 
+  async function loadHistory(requestedSymbol, period = chartPeriod) {
+    if (!requestedSymbol) return;
+    setChartLoading(true);
+    try {
+      const data = await history(requestedSymbol, period);
+      setChartData(data);
+    } catch (err) {
+      setChartData({
+        symbol: requestedSymbol,
+        period,
+        status: 'provider_unavailable',
+        points: [],
+        summary: {},
+        message: err.message,
+      });
+    } finally {
+      setChartLoading(false);
+    }
+  }
+
   async function run(requestedSymbol = searchTerm || symbol, manageLoading = true) {
     const clean = String(requestedSymbol || '').toUpperCase().trim();
     if (!clean) return;
@@ -490,6 +524,10 @@ function App() {
       const recommendationData = await analyze(clean, 'auto');
       const quoteData = recommendationData?.raw_data?.quote || null;
       let chainData = [];
+
+      // Always load the latest completed daily bars. This remains useful when
+      // the regular market is closed because it shows the last available close.
+      await loadHistory(recommendationData.symbol || clean, chartPeriod);
 
       // Fetch the table after analysis so a temporary options-chain failure does
       // not erase a valid quote or the engine's transparent NO_TRADE decision.
@@ -512,6 +550,7 @@ function App() {
     } catch (err) {
       setCurrentQuote(null);
       setChain([]);
+      setChartData(null);
       setRec(null);
       setError(err.message || `Unable to analyze ${clean}.`);
     } finally {
@@ -602,15 +641,68 @@ function App() {
       </section>
 
       <section className="grid two primaryGrid">
-        <Card title="Performance Chart">
-          <ResponsiveContainer width="100%" height={250}>
-            <LineChart data={perf}>
-              <XAxis dataKey="d" />
-              <YAxis />
-              <Tooltip />
-              <Line type="monotone" dataKey="v" strokeWidth={3} />
-            </LineChart>
-          </ResponsiveContainer>
+        <Card title={`${chartData?.symbol || symbol} Price Chart`} className="priceChartCard">
+          <div className="chartHeader">
+            <div>
+              <strong>{money(chartData?.summary?.last_price || currentQuote?.price)}</strong>
+              <span className={(chartData?.summary?.period_change || 0) >= 0 ? 'positive' : 'negative'}>
+                {(chartData?.summary?.period_change || 0) >= 0 ? '+' : ''}
+                {money(chartData?.summary?.period_change || 0)}
+                {' '}({chartData?.summary?.period_change_percent ?? 0}%)
+              </span>
+            </div>
+            <span className={`marketState ${(currentQuote?.market_status || portfolio?.market_status || 'CLOSED').toLowerCase()}`}>
+              {currentQuote?.market_status || portfolio?.market_status || 'CLOSED'}
+            </span>
+          </div>
+
+          {(currentQuote?.market_status || portfolio?.market_status) !== 'OPEN' && (
+            <div className="marketClosedNotice">
+              Market closed · showing the latest available completed price data
+              {chartData?.as_of ? ` as of ${formatAsOf(chartData.as_of)}` : ''}.
+            </div>
+          )}
+
+          <div className="chartPeriods" aria-label="Chart time range">
+            {CHART_PERIODS.map((period) => (
+              <button
+                key={period}
+                className={chartPeriod === period ? 'active' : ''}
+                disabled={chartLoading || !symbol}
+                onClick={() => {
+                  setChartPeriod(period);
+                  loadHistory(symbol, period);
+                }}
+              >
+                {period === '1mo' ? '1 Mo' : period === '3mo' ? '3 Mo' : period === '6mo' ? '6 Mo' : period === '1y' ? '1 Yr' : '5 Yrs'}
+              </button>
+            ))}
+          </div>
+
+          {chartLoading && <p className="chartStatus">Loading price history…</p>}
+          {!chartLoading && chartData?.points?.length > 0 && (
+            <ResponsiveContainer width="100%" height={280}>
+              <LineChart data={chartData.points}>
+                <XAxis dataKey="date" tickFormatter={compactDate} minTickGap={30} />
+                <YAxis domain={['auto', 'auto']} width={58} tickFormatter={(value) => `$${Number(value).toFixed(0)}`} />
+                <Tooltip
+                  labelFormatter={(value) => formatAsOf(value)}
+                  formatter={(value) => [money(value), 'Close']}
+                />
+                <Line type="monotone" dataKey="close" strokeWidth={3} dot={false} />
+              </LineChart>
+            </ResponsiveContainer>
+          )}
+          {!chartLoading && !chartData?.points?.length && (
+            <p className="chartStatus">Price history is currently unavailable. The recommendation remains NO TRADE until verified history is restored.</p>
+          )}
+
+          <div className="rangeGrid">
+            <div><span>Period low</span><b>{money(chartData?.summary?.period_low)}</b></div>
+            <div><span>Period high</span><b>{money(chartData?.summary?.period_high)}</b></div>
+            <div><span>52-week low</span><b>{money(chartData?.summary?.fifty_two_week_low || currentQuote?.fifty_two_week_low)}</b></div>
+            <div><span>52-week high</span><b>{money(chartData?.summary?.fifty_two_week_high || currentQuote?.fifty_two_week_high)}</b></div>
+          </div>
         </Card>
 
         <Card title="AI Trading Assistant" className="assistantCard">
@@ -686,15 +778,29 @@ function App() {
           <p className="searchHelp">Search by ticker (such as TSLA or BRK-B) or by company name. Valid symbols are analyzed with the same technical, options, market-context, and risk rules.</p>
 
           {currentQuote && (
-            <div className="quoteSummary">
-              <strong>{currentQuote.symbol}</strong>
-              <span>{money(currentQuote.price)}</span>
-              <span className={currentQuote.change >= 0 ? 'positive' : 'negative'}>
-                {currentQuote.change >= 0 ? '+' : ''}{money(currentQuote.change)} ({currentQuote.change_percent}%)
-              </span>
-              <span>Vol {currentQuote.volume?.toLocaleString()}</span>
-              <span>{currentQuote.market_status}</span>
-              <small>Source: {currentQuote.data_source}</small>
+            <div className="quoteSummary detailedQuote">
+              <div className="quotePrimary">
+                <div>
+                  <strong>{currentQuote.symbol}</strong>
+                  <span className="lastPrice">{money(currentQuote.price)}</span>
+                </div>
+                <span className={currentQuote.change >= 0 ? 'positive' : 'negative'}>
+                  {currentQuote.change >= 0 ? '+' : ''}{money(currentQuote.change)} ({currentQuote.change_percent}%)
+                </span>
+              </div>
+              <div className="quoteFacts">
+                <span><small>Status</small><b>{currentQuote.market_status}</b></span>
+                <span><small>As of</small><b>{formatAsOf(currentQuote.as_of || chartData?.as_of)}</b></span>
+                <span><small>Previous close</small><b>{money(currentQuote.previous_close)}</b></span>
+                <span><small>Day range</small><b>{money(currentQuote.day_low)} – {money(currentQuote.day_high)}</b></span>
+                <span><small>Volume</small><b>{currentQuote.volume?.toLocaleString()}</b></span>
+                <span><small>Data source</small><b>{currentQuote.data_source}</b></span>
+              </div>
+              {currentQuote.market_status !== 'OPEN' && (
+                <p className="lastAvailableMessage">
+                  The regular market is closed. Price, change, volume, ranges, and chart use the latest available completed market data.
+                </p>
+              )}
             </div>
           )}
 
