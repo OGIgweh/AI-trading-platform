@@ -509,18 +509,13 @@ def search_instruments(query: str, limit: int = 8) -> list[InstrumentSearchResul
     return search_instruments_with_status(query, limit)[0]
 
 
-def get_price_history(symbol: str, period: str = "1y", interval: str = "1d"):
-    """Retrieve verified OHLCV history with retries and symbol aliases.
+def _fetch_price_history_uncached(normalized: str, provider_period: str, interval: str):
+    """Fetch OHLCV data using progressively simpler yfinance calls.
 
-    Returns ``(dataframe, canonical_symbol, status)`` where status is one of
-    ``ok``, ``invalid_format``, ``not_found``, or ``provider_unavailable``.
+    Keeping this function separate from the public cached wrapper prevents the
+    chart endpoint from immediately making a second Yahoo request after the AI
+    indicator engine has already downloaded the same history.
     """
-
-    normalized = normalize_symbol(symbol)
-    provider_period = normalize_history_period(period)
-    if not is_valid_symbol_format(normalized) or not _provider_enabled():
-        return None, normalized, "invalid_format"
-
     try:
         import yfinance as yf
 
@@ -529,41 +524,89 @@ def get_price_history(symbol: str, period: str = "1y", interval: str = "1d"):
         return None, normalized, "provider_unavailable"
 
     transient = False
+    received_provider_response = False
+
     for candidate in symbol_candidates(normalized):
-        try:
-            frame = yf.Ticker(candidate).history(
-                period=provider_period,
-                interval=interval,
-                auto_adjust=False,
-                repair=True,
-                timeout=20,
-                raise_errors=True,
-            )
-            if frame is not None and not frame.empty:
-                return frame, candidate, "ok"
-        except Exception as exc:
-            transient = transient or _is_transient_error(exc)
+        ticker = yf.Ticker(candidate)
 
-        try:
-            frame = yf.download(
-                candidate,
-                period=provider_period,
-                interval=interval,
-                auto_adjust=False,
-                repair=True,
-                progress=False,
-                threads=False,
-                timeout=20,
-                multi_level_index=False,
-            )
-            frame = _extract_history_frame(frame, candidate)
-            if frame is not None and not frame.empty:
-                return frame, candidate, "ok"
-        except Exception as exc:
-            transient = transient or _is_transient_error(exc)
+        # Start with a minimal history request. Optional yfinance keyword
+        # arguments have changed between releases; an unsupported keyword can
+        # otherwise make every chart fail while quote retrieval still works.
+        ticker_attempts = [
+            {"period": provider_period, "interval": interval, "auto_adjust": False},
+            {"period": provider_period, "interval": interval},
+        ]
+        for kwargs in ticker_attempts:
+            try:
+                frame = ticker.history(**kwargs)
+                received_provider_response = True
+                if frame is not None and not frame.empty:
+                    return frame, candidate, "ok"
+            except Exception as exc:
+                transient = transient or _is_transient_error(exc)
 
-    return None, normalized, "provider_unavailable" if transient else "not_found"
+        # Download is an independent Yahoo path and is useful when Ticker.history
+        # returns an empty frame. Keep its arguments compatible across yfinance
+        # versions, then normalize possible MultiIndex responses.
+        download_attempts = [
+            {
+                "period": provider_period,
+                "interval": interval,
+                "auto_adjust": False,
+                "progress": False,
+                "threads": False,
+            },
+            {
+                "period": provider_period,
+                "interval": interval,
+                "progress": False,
+                "threads": False,
+            },
+        ]
+        for kwargs in download_attempts:
+            try:
+                frame = yf.download(candidate, **kwargs)
+                received_provider_response = True
+                frame = _extract_history_frame(frame, candidate)
+                if frame is not None and not frame.empty:
+                    return frame, candidate, "ok"
+            except Exception as exc:
+                transient = transient or _is_transient_error(exc)
 
+    if transient or not received_provider_response:
+        return None, normalized, "provider_unavailable"
+    return None, normalized, "not_found"
+
+
+@lru_cache(maxsize=512)
+def _get_price_history_cached(
+    normalized: str,
+    provider_period: str,
+    interval: str,
+    cache_bucket: int,
+):
+    del cache_bucket
+    return _fetch_price_history_uncached(normalized, provider_period, interval)
+
+
+def get_price_history(symbol: str, period: str = "1y", interval: str = "1d"):
+    """Retrieve verified OHLCV history with retries, aliases, and caching.
+
+    Returns ``(dataframe, canonical_symbol, status)``. The cache is important:
+    the AI analysis and the visible chart use the same price history, so the
+    chart should reuse the successful analysis download instead of immediately
+    making another provider request and being rate-limited.
+    """
+    normalized = normalize_symbol(symbol)
+    provider_period = normalize_history_period(period)
+    if not is_valid_symbol_format(normalized):
+        return None, normalized, "invalid_format"
+    if not _provider_enabled():
+        return None, normalized, "provider_unavailable"
+
+    cache_seconds = max(60, int(settings.market_data_cache_seconds or 60))
+    cache_bucket = int(datetime.now().timestamp() // cache_seconds)
+    return _get_price_history_cached(normalized, provider_period, interval, cache_bucket)
 
 
 def get_chart_history(symbol: str, period: str = "1y") -> dict[str, Any]:
@@ -572,7 +615,13 @@ def get_chart_history(symbol: str, period: str = "1y") -> dict[str, Any]:
     The latest completed bar remains available when the market is closed.
     """
     requested_period = normalize_history_period(period)
-    frame, canonical, status = get_price_history(symbol, requested_period, "1d")
+
+    # The indicator engine already downloads one year of daily history. Reuse
+    # that same cached frame for the 1/3/6-month and 1-year chart ranges, then
+    # slice it locally. This avoids a second immediate Yahoo request, which was
+    # causing the chart to appear unavailable even though analysis had data.
+    provider_period = "1y" if requested_period in {"1mo", "3mo", "6mo", "1y", "ytd"} else requested_period
+    frame, canonical, status = get_price_history(symbol, provider_period, "1d")
     if status != "ok" or frame is None or frame.empty:
         return {
             "symbol": canonical,
@@ -585,7 +634,9 @@ def get_chart_history(symbol: str, period: str = "1y") -> dict[str, Any]:
         }
 
     try:
-        clean = frame.dropna(subset=["Close"]).copy()
+        full_frame = frame.dropna(subset=["Close"]).copy()
+        row_windows = {"1mo": 23, "3mo": 66, "6mo": 132}
+        clean = full_frame.tail(row_windows.get(requested_period, len(full_frame))).copy()
         points = []
         for index, row in clean.iterrows():
             timestamp = index.isoformat() if hasattr(index, "isoformat") else str(index)
@@ -606,8 +657,8 @@ def get_chart_history(symbol: str, period: str = "1y") -> dict[str, Any]:
         as_of = as_of_value.isoformat() if hasattr(as_of_value, "isoformat") else str(as_of_value)
 
         # Pull a year for the 52-week range even when the visible chart is shorter.
-        range_frame = clean
-        if requested_period not in {"1y", "2y", "5y", "10y", "max"}:
+        range_frame = full_frame
+        if provider_period != "1y":
             yearly, _, yearly_status = get_price_history(canonical, "1y", "1d")
             if yearly_status == "ok" and yearly is not None and not yearly.empty:
                 range_frame = yearly.dropna(subset=["Close"])
