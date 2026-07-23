@@ -94,6 +94,19 @@ class ScoreBreakdown(BaseModel):
     threshold: int = 75
 
 
+class SuggestedOptionsLeg(BaseModel):
+    action: Literal["BUY_TO_OPEN", "SELL_TO_OPEN"]
+    quantity: int
+    expiration: str
+    days_to_expiration: Optional[int] = None
+    strike: float
+    option_type: Literal["CALL", "PUT"]
+    contract_symbol: str
+    bid: float
+    mid: float
+    ask: float
+
+
 class SuggestedOptionsOrder(BaseModel):
     """A broker-entry-ready view of the qualified options recommendation.
 
@@ -106,6 +119,7 @@ class SuggestedOptionsOrder(BaseModel):
     underlying_symbol: str
     underlying_price: float
     leg_count: int = 1
+    legs: List[SuggestedOptionsLeg] = Field(default_factory=list)
     action: Literal["BUY_TO_OPEN"] = "BUY_TO_OPEN"
     quantity: int
     expiration: str
@@ -122,6 +136,10 @@ class SuggestedOptionsOrder(BaseModel):
     special_instructions: Literal["NONE"] = "NONE"
     estimated_amount: float
     estimated_max_loss: float
+    planned_stop_loss: Optional[float] = None
+    max_profit: Optional[float] = None
+    break_even: Optional[float] = None
+    spread_width: Optional[float] = None
     price_basis: str = "Midpoint of current bid/ask"
     review_required: bool = True
     live_submission_enabled: bool = False

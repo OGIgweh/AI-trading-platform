@@ -33,6 +33,8 @@ import './style.css';
 
 const DEFAULT_SYMBOLS = ['AAPL', 'MSFT', 'NVDA', 'SPY', 'QQQ'];
 const WATCHLIST_STORAGE_KEY = 'ai-trading-platform-symbols';
+const ANALYSIS_SETTINGS_STORAGE_KEY = 'ai-trading-platform-analysis-settings';
+const DEFAULT_ANALYSIS_SETTINGS = { accountValue: 10000, minConfidence: 75, maxRiskPercent: 1 };
 
 const CHART_PERIODS = ['1mo', '3mo', '6mo', '1y', '5y'];
 
@@ -100,11 +102,11 @@ function RecommendationCard({ r, onSelect }) {
       </p>
       {order ? (
         <div className="compactOrder">
-          <span>{order.action.replaceAll('_', ' ')}</span>
+          <span>{order.strategy}</span>
+          <span>{order.leg_count || 1} leg{(order.leg_count || 1) > 1 ? 's' : ''}</span>
           <span>{order.quantity} × {order.underlying_symbol}</span>
           <span>{formatDate(order.expiration)}</span>
-          <span>{money(order.strike)} {order.option_type}</span>
-          <span>Limit {money(order.limit_price)}</span>
+          <span>{(order.leg_count || 1) > 1 ? 'Net debit' : 'Limit'} {money(order.limit_price)}</span>
         </div>
       ) : (
         <p>{r.explanation}</p>
@@ -239,34 +241,52 @@ function SuggestedOrderTicket({ rec, currentQuote }) {
   }
 
   if (!order) {
+    const blockers = rec?.raw_data?.blocking_failures || rec?.risks || [];
     return (
       <div className="noOrderTicket">
         <AlertTriangle size={22} />
         <div>
           <b>No broker order ticket generated</b>
-          <p>
-            The engine only creates entry fields after all evidence, liquidity, market-context,
-            confidence, and risk rules qualify. Do not enter an options order from this analysis.
-          </p>
+          <p>The setup did not pass every critical evidence, execution, confidence, and risk gate.</p>
+          {blockers.length > 0 && (
+            <ul className="blockingReasons">
+              {blockers.slice(0, 6).map((reason, index) => <li key={index}>{reason}</li>)}
+            </ul>
+          )}
         </div>
       </div>
     );
   }
 
-  const actionDisplay = order.action.replaceAll('_', ' ');
-  const ticketText = [
+  const legs = order.legs?.length ? order.legs : [{
+    action: order.action,
+    quantity: order.quantity,
+    expiration: order.expiration,
+    days_to_expiration: order.days_to_expiration,
+    strike: order.strike,
+    option_type: order.option_type,
+    contract_symbol: order.contract_symbol,
+    bid: order.bid,
+    mid: order.mid,
+    ask: order.ask,
+  }];
+
+  const ticketLines = [
     `Underlying: ${order.underlying_symbol}`,
-    `Action: ${actionDisplay}`,
-    `Quantity: ${order.quantity}`,
-    `Expiration: ${formatDate(order.expiration)}`,
-    `Strike: ${money(order.strike)}`,
-    `Call / Put: ${order.option_type}`,
+    `Strategy: ${order.strategy}`,
+    ...legs.flatMap((leg, index) => [
+      `Leg ${index + 1} Action: ${leg.action.replaceAll('_', ' ')}`,
+      `Leg ${index + 1} Quantity: ${leg.quantity}`,
+      `Leg ${index + 1} Expiration: ${formatDate(leg.expiration)}`,
+      `Leg ${index + 1} Strike: ${money(leg.strike)} ${leg.option_type}`,
+      `Leg ${index + 1} Contract: ${leg.contract_symbol}`,
+    ]),
     `Order Type: ${order.order_type}`,
-    `Limit Price: ${money(order.limit_price)}`,
+    `Net Limit Price: ${money(order.limit_price)}`,
     `Timing: ${order.timing === 'DAY' ? 'Day only' : order.timing}`,
-    `Special Instructions: ${order.special_instructions}`,
-    `Contract: ${order.contract_symbol}`,
-  ].join('\n');
+    `Estimated Max Loss: ${money(order.estimated_max_loss)}`,
+  ];
+  const ticketText = ticketLines.join('\n');
 
   return (
     <section className="orderTicket" aria-label="Suggested options order ticket">
@@ -274,85 +294,57 @@ function SuggestedOrderTicket({ rec, currentQuote }) {
         <div>
           <span className="eyebrow">BROKER ENTRY FORMAT</span>
           <h3>Suggested Options Order</h3>
-          <p>Fields are arranged to match a standard Charles Schwab options ticket.</p>
+          <p>{order.leg_count > 1 ? 'Defined-risk multi-leg order' : 'Single-leg directional order'} arranged in broker-entry sequence.</p>
         </div>
         <span className="paperOnlyBadge">Review required</span>
       </div>
 
       <div className="underlyingStrip">
-        <div>
-          <span>Underlying</span>
-          <strong>{order.underlying_symbol}</strong>
-        </div>
-        <div>
-          <span>Market price</span>
-          <strong>{money(order.underlying_price)}</strong>
-        </div>
-        <div>
-          <span>Strategy</span>
-          <strong>{order.strategy}</strong>
-        </div>
-        <div>
-          <span>Holding period</span>
-          <strong>{rec.expected_holding_period}</strong>
-        </div>
+        <div><span>Underlying</span><strong>{order.underlying_symbol}</strong></div>
+        <div><span>Market price</span><strong>{money(order.underlying_price)}</strong></div>
+        <div><span>Strategy</span><strong>{order.strategy}</strong></div>
+        <div><span>Holding period</span><strong>{rec.expected_holding_period}</strong></div>
       </div>
 
-      <div className="legPanel">
-        <div className="legHeader">
-          <div><ChevronDown size={22} /><b>Leg 1</b></div>
-          <span><Layers3 size={15} /> One-leg order</span>
-        </div>
-
-        <TicketRow
-          label="Action"
-          value={actionDisplay}
-          copyValue={actionDisplay}
-          onCopy={copyValue}
-          copied={copied}
-        />
-        <TicketRow
-          label="Quantity"
-          value={order.quantity}
-          help="Number of option contracts"
-          copyValue={order.quantity}
-          onCopy={copyValue}
-          copied={copied}
-        />
-        <TicketRow
-          label="Expiration"
-          value={`${formatDate(order.expiration)}${order.days_to_expiration != null ? ` · ${order.days_to_expiration} DTE` : ''}`}
-          copyValue={order.expiration}
-          onCopy={copyValue}
-          copied={copied}
-        />
-        <TicketRow
-          label="Strike"
-          value={money(order.strike)}
-          copyValue={Number(order.strike).toFixed(2)}
-          onCopy={copyValue}
-          copied={copied}
-        />
-
-        <div className="ticketRow optionTypeRow">
-          <div className="ticketLabel"><span>Call / Put</span></div>
-          <div className="optionToggle" aria-label={`${order.option_type} selected`}>
-            <span className={order.option_type === 'CALL' ? 'selected' : ''}>Call</span>
-            <span className={order.option_type === 'PUT' ? 'selected' : ''}>Put</span>
+      {legs.map((leg, index) => {
+        const actionDisplay = leg.action.replaceAll('_', ' ');
+        return (
+          <div className="legPanel" key={`${leg.contract_symbol}-${index}`}>
+            <div className="legHeader">
+              <div><ChevronDown size={22} /><b>Leg {index + 1}</b></div>
+              <span><Layers3 size={15} /> {order.leg_count > 1 ? `${order.leg_count}-leg order` : 'One-leg order'}</span>
+            </div>
+            <TicketRow label="Action" value={actionDisplay} copyValue={actionDisplay} onCopy={copyValue} copied={copied} />
+            <TicketRow label="Quantity" value={leg.quantity} help="Number of option contracts" copyValue={leg.quantity} onCopy={copyValue} copied={copied} />
+            <TicketRow
+              label="Expiration"
+              value={`${formatDate(leg.expiration)}${leg.days_to_expiration != null ? ` · ${leg.days_to_expiration} DTE` : ''}`}
+              copyValue={leg.expiration}
+              onCopy={copyValue}
+              copied={copied}
+            />
+            <TicketRow label="Strike" value={money(leg.strike)} copyValue={Number(leg.strike).toFixed(2)} onCopy={copyValue} copied={copied} />
+            <div className="ticketRow optionTypeRow">
+              <div className="ticketLabel"><span>Call / Put</span></div>
+              <div className="optionToggle" aria-label={`${leg.option_type} selected`}>
+                <span className={leg.option_type === 'CALL' ? 'selected' : ''}>Call</span>
+                <span className={leg.option_type === 'PUT' ? 'selected' : ''}>Put</span>
+              </div>
+            </div>
+            <div className="quoteStrip">
+              <div><span>Bid</span><b>{money(leg.bid)}</b></div>
+              <div><span>Mid</span><b>{money(leg.mid)}</b></div>
+              <div><span>Ask</span><b>{money(leg.ask)}</b></div>
+            </div>
+            <TicketRow label="Contract Symbol" value={leg.contract_symbol} copyValue={leg.contract_symbol} onCopy={copyValue} copied={copied} />
           </div>
-        </div>
-
-        <div className="quoteStrip">
-          <div><span>Bid</span><b>{money(order.bid)}</b></div>
-          <div><span>Mid</span><b>{money(order.mid)}</b></div>
-          <div><span>Ask</span><b>{money(order.ask)}</b></div>
-        </div>
-      </div>
+        );
+      })}
 
       <div className="orderSettings">
         <TicketRow label="Order Type" value="Limit" />
         <TicketRow
-          label="Price"
+          label={order.leg_count > 1 ? 'Net debit price' : 'Price'}
           value={money(order.limit_price)}
           help={order.price_basis}
           copyValue={Number(order.limit_price).toFixed(2)}
@@ -361,44 +353,24 @@ function SuggestedOrderTicket({ rec, currentQuote }) {
         />
         <TicketRow label="Timing" value="Day only" />
         <TicketRow label="Special Instructions" value="None" />
-        <TicketRow
-          label="Contract Symbol"
-          value={order.contract_symbol}
-          copyValue={order.contract_symbol}
-          onCopy={copyValue}
-          copied={copied}
-        />
+        {order.break_even != null && <TicketRow label="Break-even at expiration" value={money(order.break_even)} />}
       </div>
 
       <div className="exitPlan">
-        <div>
-          <span>Suggested stop</span>
-          <strong>{money(rec.stop_loss)}</strong>
-        </div>
-        <div>
-          <span>Profit target 1</span>
-          <strong>{money(rec.profit_targets?.[0])}</strong>
-        </div>
-        <div>
-          <span>Profit target 2</span>
-          <strong>{money(rec.profit_targets?.[1])}</strong>
-        </div>
-        <div>
-          <span>Maximum modeled risk</span>
-          <strong>{money(rec.max_risk_dollars || order.estimated_max_loss)}</strong>
-        </div>
+        <div><span>Suggested stop</span><strong>{money(rec.stop_loss)}</strong></div>
+        <div><span>Profit target 1</span><strong>{money(rec.profit_targets?.[0])}</strong></div>
+        <div><span>Profit target 2</span><strong>{money(rec.profit_targets?.[1])}</strong></div>
+        <div><span>Maximum possible loss</span><strong>{money(order.estimated_max_loss)}</strong></div>
+        {order.max_profit != null && <div><span>Maximum profit at expiration</span><strong>{money(order.max_profit)}</strong></div>}
       </div>
 
       <div className="estimatedAmount">
         <div>
-          <span>Estimated Amount</span>
+          <span>{order.leg_count > 1 ? 'Estimated Net Debit' : 'Estimated Amount'}</span>
           <strong>{money(order.estimated_amount)}</strong>
-          <small>Based on limit price × 100 shares per contract; excludes commissions and fees.</small>
+          <small>Excludes commissions and fees. Verify all legs, prices, and buying-power effects in the broker.</small>
         </div>
-        <button
-          className="copyTicketButton"
-          onClick={() => copyValue(ticketText, 'Full ticket')}
-        >
+        <button className="copyTicketButton" onClick={() => copyValue(ticketText, 'Full ticket')}>
           {copied === 'Full ticket' ? <Check size={18} /> : <Clipboard size={18} />}
           {copied === 'Full ticket' ? 'Copied' : 'Copy order ticket'}
         </button>
@@ -406,11 +378,7 @@ function SuggestedOrderTicket({ rec, currentQuote }) {
 
       <div className="ticketWarning">
         <ShieldCheck size={20} />
-        <p>
-          <b>Verify before submitting:</b> confirm the underlying quote, contract expiration,
-          strike, bid/ask, buying power, and estimated amount directly in Schwab. This platform
-          does not submit the order and cannot guarantee execution at the midpoint.
-        </p>
+        <p><b>Verify before submitting:</b> confirm every leg, expiration, strike, net debit, buying power, and maximum loss directly in Schwab. This platform does not submit orders or guarantee fills.</p>
       </div>
     </section>
   );
@@ -440,6 +408,18 @@ function App() {
   const [recs, setRecs] = useState([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
+  const [analysisSettings, setAnalysisSettings] = useState(() => {
+    try {
+      const saved = JSON.parse(localStorage.getItem(ANALYSIS_SETTINGS_STORAGE_KEY) || '{}');
+      return {
+        accountValue: Number(saved.accountValue) > 0 ? Number(saved.accountValue) : DEFAULT_ANALYSIS_SETTINGS.accountValue,
+        minConfidence: Number(saved.minConfidence) >= 50 ? Number(saved.minConfidence) : DEFAULT_ANALYSIS_SETTINGS.minConfidence,
+        maxRiskPercent: Number(saved.maxRiskPercent) > 0 ? Number(saved.maxRiskPercent) : DEFAULT_ANALYSIS_SETTINGS.maxRiskPercent,
+      };
+    } catch {
+      return DEFAULT_ANALYSIS_SETTINGS;
+    }
+  });
 
   useEffect(() => {
     getPortfolio().then(setPortfolio).catch(() => setError('Unable to load portfolio summary.'));
@@ -449,6 +429,10 @@ function App() {
   useEffect(() => {
     localStorage.setItem(WATCHLIST_STORAGE_KEY, JSON.stringify(watchSymbols));
   }, [watchSymbols]);
+
+  useEffect(() => {
+    localStorage.setItem(ANALYSIS_SETTINGS_STORAGE_KEY, JSON.stringify(analysisSettings));
+  }, [analysisSettings]);
 
   useEffect(() => {
     const query = searchTerm.trim();
@@ -521,7 +505,7 @@ function App() {
     try {
       // Analyze first. The analysis response already contains the verified quote,
       // which avoids three simultaneous Yahoo requests for the same ticker.
-      const recommendationData = await analyze(clean, 'auto');
+      const recommendationData = await analyze(clean, 'auto', analysisSettings);
       const quoteData = recommendationData?.raw_data?.quote || null;
       let chainData = [];
 
@@ -631,8 +615,8 @@ function App() {
           <span>Open positions {portfolio?.open_positions || 0}</span>
         </Card>
         <Card title="AI Confidence" icon={<Brain />}>
-          <b>{portfolio?.ai_confidence_level || 0}%</b>
-          <span>{portfolio?.market_sentiment}</span>
+          <b>{rec ? `${rec.confidence}%` : '—'}</b>
+          <span>{rec ? `${rec.symbol} · ${rec.recommendation === 'NO_TRADE' ? 'No trade' : rec.recommendation}` : 'Run an analysis'}</span>
         </Card>
         <Card title="Risk Mode" icon={<AlertTriangle />}>
           <b>Capital First</b>
@@ -776,6 +760,59 @@ function App() {
             ))}
           </div>
           <p className="searchHelp">Search by ticker (such as TSLA or BRK-B) or by company name. Valid symbols are analyzed with the same technical, options, market-context, and risk rules.</p>
+
+          <div className="analysisControls" aria-label="Analysis and risk controls">
+            <label>
+              <span>Account value</span>
+              <input
+                type="number"
+                min="1000"
+                step="1000"
+                value={analysisSettings.accountValue}
+                onChange={(event) => setAnalysisSettings((previous) => ({
+                  ...previous,
+                  accountValue: Math.max(1000, Number(event.target.value) || 1000),
+                }))}
+              />
+            </label>
+            <label>
+              <span>Risk per trade</span>
+              <select
+                value={analysisSettings.maxRiskPercent}
+                onChange={(event) => setAnalysisSettings((previous) => ({
+                  ...previous,
+                  maxRiskPercent: Number(event.target.value),
+                }))}
+              >
+                <option value="0.5">0.5%</option>
+                <option value="1">1%</option>
+                <option value="1.5">1.5%</option>
+                <option value="2">2%</option>
+                <option value="3">3%</option>
+              </select>
+            </label>
+            <label>
+              <span>Minimum confidence</span>
+              <select
+                value={analysisSettings.minConfidence}
+                onChange={(event) => setAnalysisSettings((previous) => ({
+                  ...previous,
+                  minConfidence: Number(event.target.value),
+                }))}
+              >
+                <option value="65">65%</option>
+                <option value="70">70%</option>
+                <option value="75">75%</option>
+                <option value="80">80%</option>
+                <option value="85">85%</option>
+              </select>
+            </label>
+            <div className="riskBudgetSummary">
+              <span>Configured risk budget</span>
+              <strong>{money(analysisSettings.accountValue * analysisSettings.maxRiskPercent / 100)}</strong>
+              <small>Used for position sizing. Enter values that reflect your real account and limits.</small>
+            </div>
+          </div>
 
           {currentQuote && (
             <div className="quoteSummary detailedQuote">

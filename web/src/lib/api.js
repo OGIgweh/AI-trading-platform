@@ -8,11 +8,31 @@ async function request(path, options) {
       const payload = await res.json();
       message = payload.detail || payload.message || message;
     } catch {
-      // Keep the status-based fallback when a non-JSON response is returned.
+      // Keep status fallback for non-JSON responses.
     }
     throw new Error(message);
   }
   return res.json();
+}
+
+const DEFAULT_ANALYSIS_SETTINGS = {
+  accountValue: 10000,
+  minConfidence: 75,
+  maxRiskPercent: 1,
+};
+
+function normalizeSettings(settings = {}) {
+  return {
+    accountValue: Number(settings.accountValue) > 0
+      ? Number(settings.accountValue)
+      : DEFAULT_ANALYSIS_SETTINGS.accountValue,
+    minConfidence: Number(settings.minConfidence) >= 1
+      ? Number(settings.minConfidence)
+      : DEFAULT_ANALYSIS_SETTINGS.minConfidence,
+    maxRiskPercent: Number(settings.maxRiskPercent) > 0
+      ? Number(settings.maxRiskPercent)
+      : DEFAULT_ANALYSIS_SETTINGS.maxRiskPercent,
+  };
 }
 
 export function getPortfolio() { return request('/portfolio/summary'); }
@@ -22,17 +42,33 @@ export function options(symbol) { return request(`/market/options/${encodeURICom
 export function history(symbol, period = '1y') {
   return request(`/market/history/${encodeURIComponent(symbol)}?period=${encodeURIComponent(period)}`);
 }
-export function analyze(symbol, strategy = 'long_call') {
+
+export function analyze(symbol, strategy = 'auto', settings = DEFAULT_ANALYSIS_SETTINGS) {
+  const normalized = normalizeSettings(settings);
   return request('/ai/analyze', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ symbol, account_value: 10000, strategy, min_confidence: 75, max_risk_percent: 1 })
+    body: JSON.stringify({
+      symbol,
+      account_value: normalized.accountValue,
+      strategy,
+      min_confidence: normalized.minConfidence,
+      max_risk_percent: normalized.maxRiskPercent,
+    }),
   });
 }
-export function recommendations(symbols = ['AAPL','MSFT','NVDA','SPY','QQQ']) {
+
+export function recommendations(symbols = ['AAPL', 'MSFT', 'NVDA', 'SPY', 'QQQ'], settings = DEFAULT_ANALYSIS_SETTINGS) {
+  const normalized = normalizeSettings(settings);
   return request('/ai/recommendations', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ symbols, account_value: 10000, min_confidence: 75, max_risk_percent: 1, include_no_trade: true })
+    body: JSON.stringify({
+      symbols,
+      account_value: normalized.accountValue,
+      min_confidence: normalized.minConfidence,
+      max_risk_percent: normalized.maxRiskPercent,
+      include_no_trade: true,
+    }),
   });
 }

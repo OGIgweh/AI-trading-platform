@@ -6,10 +6,15 @@ from typing import Any, List
 from app.models.schemas import EvidenceItem, OptionContract, Quote, ScoreBreakdown
 from app.services.risk import bid_ask_spread_pct
 
-MAX_SPREAD = 8.0
-MIN_OPTION_VOLUME = 500
-MIN_OPEN_INTEREST = 1000
-MIN_PRICE_VOLUME = 1_000_000
+# Preferred liquidity thresholds. Missing one preferred threshold is a warning;
+# critically illiquid contracts remain hard failures.
+PREFERRED_SPREAD = 8.0
+MAX_EXECUTABLE_SPREAD = 20.0
+PREFERRED_OPTION_VOLUME = 250
+PREFERRED_OPEN_INTEREST = 500
+CRITICAL_OPTION_VOLUME = 10
+CRITICAL_OPEN_INTEREST = 100
+MIN_PRICE_VOLUME = 250_000
 
 
 @dataclass
@@ -22,8 +27,28 @@ class ScoreResult:
     warnings: List[str]
 
 
-def ev(category: str, name: str, value: Any, signal: str, score: int, weight: float, passed: bool, explanation: str, data_source: str) -> EvidenceItem:
-    return EvidenceItem(category=category, name=name, value=value, signal=signal, score=max(-100, min(100, int(score))), weight=weight, passed=passed, explanation=explanation, data_source=data_source)
+def ev(
+    category: str,
+    name: str,
+    value: Any,
+    signal: str,
+    score: int,
+    weight: float,
+    passed: bool,
+    explanation: str,
+    data_source: str,
+) -> EvidenceItem:
+    return EvidenceItem(
+        category=category,
+        name=name,
+        value=value,
+        signal=signal,
+        score=max(-100, min(100, int(score))),
+        weight=weight,
+        passed=passed,
+        explanation=explanation,
+        data_source=data_source,
+    )
 
 
 def score_technical(tech: dict) -> tuple[int, str, list[EvidenceItem], list[str]]:
@@ -32,76 +57,101 @@ def score_technical(tech: dict) -> tuple[int, str, list[EvidenceItem], list[str]
     ds = tech.get("data_source", "unknown")
     if ds != "yfinance_delayed":
         failures.append("Verified historical price data is unavailable.")
-        return 0, "NO_TRADE", [ev("Technical", "Price history", ds, "fail", -100, 1, False, "Historical OHLCV data is required before any recommendation is allowed.", ds)], failures
+        return 0, "NO_TRADE", [
+            ev(
+                "Technical",
+                "Price history",
+                ds,
+                "fail",
+                -100,
+                1,
+                False,
+                "Historical OHLCV data is required before any recommendation is allowed.",
+                ds,
+            )
+        ], failures
 
     bull = 0
     bear = 0
     trend = tech.get("trend")
     if trend == "bullish":
-        bull += 22
-        evidence.append(ev("Technical", "Trend", trend, "bullish", 22, 0.22, True, "EMA alignment and price location indicate an upward trend.", ds))
+        bull += 24
+        evidence.append(ev("Technical", "Trend", trend, "bullish", 24, 0.24, True, "EMA alignment and price location indicate an upward trend.", ds))
     elif trend == "bearish":
-        bear += 22
-        evidence.append(ev("Technical", "Trend", trend, "bearish", 22, 0.22, True, "EMA alignment and price location indicate a downward trend.", ds))
+        bear += 24
+        evidence.append(ev("Technical", "Trend", trend, "bearish", 24, 0.24, True, "EMA alignment and price location indicate a downward trend.", ds))
     else:
-        evidence.append(ev("Technical", "Trend", trend, "neutral", 0, 0.22, False, "Trend is mixed, reducing confidence.", ds))
+        evidence.append(ev("Technical", "Trend", trend, "neutral", 0, 0.24, False, "Trend is mixed, reducing confidence.", ds))
 
     rsi = tech.get("rsi")
     if rsi is None:
         failures.append("RSI could not be calculated.")
         evidence.append(ev("Technical", "RSI", None, "fail", -10, 0.12, False, "RSI is required for momentum confirmation.", ds))
-    elif 45 <= rsi <= 68:
+    elif 48 <= rsi <= 68:
         bull += 12
-        evidence.append(ev("Technical", "RSI", rsi, "bullish", 12, 0.12, True, "RSI is in a constructive bullish range without being overbought.", ds))
-    elif 32 <= rsi < 45:
-        bear += 8
-        evidence.append(ev("Technical", "RSI", rsi, "bearish", 8, 0.12, True, "RSI shows weak momentum.", ds))
+        evidence.append(ev("Technical", "RSI", rsi, "bullish", 12, 0.12, True, "RSI confirms constructive bullish momentum without being overbought.", ds))
+    elif 32 <= rsi <= 48:
+        bear += 10
+        evidence.append(ev("Technical", "RSI", rsi, "bearish", 10, 0.12, True, "RSI confirms weak or bearish momentum.", ds))
     elif rsi >= 75 or rsi <= 25:
-        evidence.append(ev("Technical", "RSI", rsi, "warning", -12, 0.12, False, "RSI is extreme; chase risk is high.", ds))
+        evidence.append(ev("Technical", "RSI", rsi, "warning", -12, 0.12, False, "RSI is extreme; reversal and chase risk are elevated.", ds))
     else:
-        evidence.append(ev("Technical", "RSI", rsi, "neutral", 0, 0.12, False, "RSI is not confirming strongly.", ds))
+        evidence.append(ev("Technical", "RSI", rsi, "neutral", 0, 0.12, False, "RSI is not strongly directional.", ds))
 
     macd_state = (tech.get("macd") or {}).get("state", "unknown")
     if macd_state == "bullish":
-        bull += 14
-        evidence.append(ev("Technical", "MACD", tech.get("macd"), "bullish", 14, 0.14, True, "MACD line is above signal with improving histogram.", ds))
+        bull += 16
+        evidence.append(ev("Technical", "MACD", tech.get("macd"), "bullish", 16, 0.16, True, "MACD is above signal with improving histogram.", ds))
     elif macd_state == "bearish":
-        bear += 14
-        evidence.append(ev("Technical", "MACD", tech.get("macd"), "bearish", 14, 0.14, True, "MACD line is below signal with weakening histogram.", ds))
+        bear += 16
+        evidence.append(ev("Technical", "MACD", tech.get("macd"), "bearish", 16, 0.16, True, "MACD is below signal with weakening histogram.", ds))
     else:
-        evidence.append(ev("Technical", "MACD", tech.get("macd"), "neutral", 0, 0.14, False, "MACD is mixed.", ds))
+        evidence.append(ev("Technical", "MACD", tech.get("macd"), "neutral", 0, 0.16, False, "MACD is mixed.", ds))
 
     if tech.get("vwap_relation") == "above":
-        bull += 10
-        evidence.append(ev("Technical", "VWAP", f"Price above 20-day VWAP {tech.get('vwap')}", "bullish", 10, 0.10, True, "Price is trading above VWAP, supporting long-call bias.", ds))
+        bull += 12
+        evidence.append(ev("Technical", "VWAP", f"Price above 20-day VWAP {tech.get('vwap')}", "bullish", 12, 0.12, True, "Price is above VWAP, supporting bullish bias.", ds))
     elif tech.get("vwap_relation") == "below":
-        bear += 10
-        evidence.append(ev("Technical", "VWAP", f"Price below 20-day VWAP {tech.get('vwap')}", "bearish", 10, 0.10, True, "Price is below VWAP, supporting long-put bias.", ds))
+        bear += 12
+        evidence.append(ev("Technical", "VWAP", f"Price below 20-day VWAP {tech.get('vwap')}", "bearish", 12, 0.12, True, "Price is below VWAP, supporting bearish bias.", ds))
 
-    volume_ratio = tech.get("volume_ratio", 0)
-    if volume_ratio >= 1.2:
-        bull += 8 if bull >= bear else 0
-        bear += 8 if bear > bull else 0
-        evidence.append(ev("Technical", "Volume", f"{volume_ratio}x 20-day average", "pass", 8, 0.08, True, "Volume is above average, confirming participation.", ds))
+    volume_ratio = float(tech.get("volume_ratio", 0) or 0)
+    leading = "bullish" if bull > bear else "bearish" if bear > bull else "neutral"
+    if volume_ratio >= 1.15 and leading != "neutral":
+        if leading == "bullish":
+            bull += 10
+        else:
+            bear += 10
+        evidence.append(ev("Technical", "Volume", f"{volume_ratio}x 20-day average", "pass", 10, 0.10, True, "Above-average volume confirms the leading direction.", ds))
+    elif volume_ratio >= 0.75:
+        evidence.append(ev("Technical", "Volume", f"{volume_ratio}x 20-day average", "info", 2, 0.10, True, "Volume is adequate but not an exceptional confirmation.", ds))
     else:
-        evidence.append(ev("Technical", "Volume", f"{volume_ratio}x 20-day average", "warning", -6, 0.08, False, "Volume is not confirming the setup.", ds))
+        evidence.append(ev("Technical", "Volume", f"{volume_ratio}x 20-day average", "warning", -6, 0.10, False, "Volume is below normal and reduces conviction.", ds))
 
     bb_pos = tech.get("bollinger_position")
     if bb_pos is not None:
-        if 0.15 <= bb_pos <= 0.85:
-            evidence.append(ev("Technical", "Bollinger Bands", bb_pos, "pass", 6, 0.06, True, "Price is not stretched outside the bands.", ds))
-            bull += 3 if bull >= bear else 0
-            bear += 3 if bear > bull else 0
+        if 0.10 <= bb_pos <= 0.90:
+            evidence.append(ev("Technical", "Bollinger Bands", bb_pos, "pass", 6, 0.06, True, "Price is not materially stretched beyond the bands.", ds))
+            if bull >= bear:
+                bull += 4
+            else:
+                bear += 4
         else:
-            evidence.append(ev("Technical", "Bollinger Bands", bb_pos, "warning", -6, 0.06, False, "Price is stretched near/outside a band, increasing reversal risk.", ds))
+            evidence.append(ev("Technical", "Bollinger Bands", bb_pos, "warning", -6, 0.06, False, "Price is stretched near or beyond a band.", ds))
 
-    atr = tech.get("atr")
-    evidence.append(ev("Technical", "ATR", atr, "info", 0, 0.04, True, "ATR is used to frame stops and holding-period risk.", ds))
+    evidence.append(ev("Technical", "ATR", tech.get("atr"), "info", 0, 0.04, True, "ATR frames expected movement and stop distance.", ds))
+
+    directional_gap = abs(bull - bear)
     direction = "CALL" if bull > bear else "PUT" if bear > bull else "NO_TRADE"
-    score = max(bull, bear)
-    # Normalize directional evidence into a 0-100 technical score.
-    tech_score = int(max(0, min(100, 40 + score - min(bull, bear) * 0.5))) if direction != "NO_TRADE" else 35
-    return tech_score, direction, evidence, failures
+    if direction == "NO_TRADE" or directional_gap < 10:
+        direction = "NO_TRADE"
+        technical_score = max(35, min(64, 40 + directional_gap))
+    else:
+        dominant = max(bull, bear)
+        opposing = min(bull, bear)
+        technical_score = int(max(0, min(100, 45 + dominant - (opposing * 0.60))))
+
+    return technical_score, direction, evidence, failures
 
 
 def score_options(contract: OptionContract | None, direction: str) -> tuple[int, list[EvidenceItem], list[str], list[str]]:
@@ -111,47 +161,66 @@ def score_options(contract: OptionContract | None, direction: str) -> tuple[int,
     ds = "yfinance_delayed_options"
     if contract is None:
         failures.append(f"No usable {direction} option contract was found.")
-        evidence.append(ev("Options", "Contract availability", None, "fail", -100, 1, False, "A liquid options contract is required before a recommendation can qualify.", ds))
+        evidence.append(ev("Options", "Contract availability", None, "fail", -100, 1, False, "A usable options contract is required before a recommendation can qualify.", ds))
         return 0, evidence, failures, warnings
 
     score = 0
     spread = bid_ask_spread_pct(contract.bid, contract.ask)
-    if spread <= MAX_SPREAD:
-        score += 30
-        evidence.append(ev("Options", "Bid/ask spread", f"{spread}%", "pass", 30, 0.30, True, "Spread is tight enough for safer entry/exit.", ds))
+    if spread <= PREFERRED_SPREAD:
+        score += 32
+        evidence.append(ev("Options", "Bid/ask spread", f"{spread}%", "pass", 32, 0.32, True, "Spread is within the preferred execution range.", ds))
+    elif spread <= MAX_EXECUTABLE_SPREAD:
+        score += 16
+        warnings.append(f"Bid/ask spread {spread}% is wider than the preferred {PREFERRED_SPREAD}% range.")
+        evidence.append(ev("Options", "Bid/ask spread", f"{spread}%", "warning", 16, 0.32, False, "The contract remains executable but slippage risk is elevated.", ds))
     else:
-        failures.append(f"Bid/ask spread {spread}% exceeds {MAX_SPREAD}% maximum.")
-        evidence.append(ev("Options", "Bid/ask spread", f"{spread}%", "fail", -30, 0.30, False, "Wide spreads create slippage and poor fills.", ds))
+        failures.append(f"Bid/ask spread {spread}% exceeds the {MAX_EXECUTABLE_SPREAD}% safety maximum.")
+        evidence.append(ev("Options", "Bid/ask spread", f"{spread}%", "fail", -32, 0.32, False, "The spread is too wide for a disciplined entry.", ds))
 
-    if contract.volume >= MIN_OPTION_VOLUME:
+    volume_ok = contract.volume >= PREFERRED_OPTION_VOLUME
+    oi_ok = contract.open_interest >= PREFERRED_OPEN_INTEREST
+    critically_illiquid = contract.volume < CRITICAL_OPTION_VOLUME and contract.open_interest < CRITICAL_OPEN_INTEREST
+
+    if volume_ok:
         score += 22
-        evidence.append(ev("Options", "Volume", contract.volume, "pass", 22, 0.22, True, "Contract volume meets liquidity minimum.", ds))
+        evidence.append(ev("Options", "Volume", contract.volume, "pass", 22, 0.22, True, "Contract volume meets the preferred liquidity level.", ds))
+    elif contract.volume >= CRITICAL_OPTION_VOLUME:
+        score += 10
+        warnings.append(f"Option volume {contract.volume} is below the preferred {PREFERRED_OPTION_VOLUME} level.")
+        evidence.append(ev("Options", "Volume", contract.volume, "warning", 10, 0.22, False, "Volume is usable but below the preferred level.", ds))
     else:
-        failures.append(f"Option volume {contract.volume} is below {MIN_OPTION_VOLUME} minimum.")
-        evidence.append(ev("Options", "Volume", contract.volume, "fail", -22, 0.22, False, "Low volume makes entries/exits less reliable.", ds))
+        evidence.append(ev("Options", "Volume", contract.volume, "warning", 0, 0.22, False, "Contract volume is very low.", ds))
 
-    if contract.open_interest >= MIN_OPEN_INTEREST:
+    if oi_ok:
         score += 22
-        evidence.append(ev("Options", "Open interest", contract.open_interest, "pass", 22, 0.22, True, "Open interest meets liquidity minimum.", ds))
+        evidence.append(ev("Options", "Open interest", contract.open_interest, "pass", 22, 0.22, True, "Open interest meets the preferred liquidity level.", ds))
+    elif contract.open_interest >= CRITICAL_OPEN_INTEREST:
+        score += 10
+        warnings.append(f"Open interest {contract.open_interest} is below the preferred {PREFERRED_OPEN_INTEREST} level.")
+        evidence.append(ev("Options", "Open interest", contract.open_interest, "warning", 10, 0.22, False, "Open interest is usable but below the preferred level.", ds))
     else:
-        failures.append(f"Open interest {contract.open_interest} is below {MIN_OPEN_INTEREST} minimum.")
-        evidence.append(ev("Options", "Open interest", contract.open_interest, "fail", -22, 0.22, False, "Low open interest can increase execution risk.", ds))
+        evidence.append(ev("Options", "Open interest", contract.open_interest, "warning", 0, 0.22, False, "Open interest is very low.", ds))
 
-    iv = contract.implied_volatility
-    if 0.10 <= iv <= 0.80:
+    if critically_illiquid:
+        failures.append("Both option volume and open interest are below minimum executable levels.")
+
+    iv = float(contract.implied_volatility or 0)
+    if 0.08 <= iv <= 1.00:
         score += 14
-        evidence.append(ev("Options", "Implied volatility", f"{round(iv * 100, 1)}%", "pass", 14, 0.14, True, "IV is within the allowed range for this basic long-options strategy.", ds))
+        evidence.append(ev("Options", "Implied volatility", f"{round(iv * 100, 1)}%", "pass", 14, 0.14, True, "IV is within the permitted range for the proposed strategy.", ds))
     else:
-        warnings.append("Implied volatility is outside preferred range.")
-        evidence.append(ev("Options", "Implied volatility", f"{round(iv * 100, 1)}%", "warning", -8, 0.14, False, "Extreme IV can make long options expensive or unreliable.", ds))
+        warnings.append("Implied volatility is outside the preferred range.")
+        evidence.append(ev("Options", "Implied volatility", f"{round(iv * 100, 1)}%", "warning", 3, 0.14, False, "Extreme or missing IV reduces confidence.", ds))
+        score += 3
 
-    abs_delta = abs(contract.delta)
-    if 0.25 <= abs_delta <= 0.65:
-        score += 12
-        evidence.append(ev("Options", "Delta", contract.delta, "pass", 12, 0.12, True, "Delta is in a usable range for directional exposure.", ds))
+    abs_delta = abs(float(contract.delta or 0))
+    if 0.22 <= abs_delta <= 0.65:
+        score += 10
+        evidence.append(ev("Options", "Delta", contract.delta, "pass", 10, 0.10, True, "Delta provides usable directional exposure.", ds))
     else:
-        warnings.append("Delta is outside preferred directional range.")
-        evidence.append(ev("Options", "Delta", contract.delta, "warning", -6, 0.12, False, "Delta is not in the preferred range.", ds))
+        warnings.append("Delta is outside the preferred directional range.")
+        evidence.append(ev("Options", "Delta", contract.delta, "warning", 2, 0.10, False, "Delta is less efficient for this directional setup.", ds))
+        score += 2
 
     return int(max(0, min(100, score))), evidence, failures, warnings
 
@@ -162,43 +231,81 @@ def score_market(market: dict, direction: str) -> tuple[int, list[EvidenceItem],
     ds = market.get("data_source", "unknown")
     if ds != "yfinance_delayed":
         failures.append("Verified SPY/QQQ market context is unavailable.")
-        evidence.append(ev("Market", "Market context", ds, "fail", -100, 1, False, "SPY/QQQ context is required before trade qualification.", ds))
+        evidence.append(ev("Market", "Market context", ds, "fail", -100, 1, False, "Broad-market context is required before qualification.", ds))
         return 0, evidence, failures
+
     breadth = market.get("market_breadth")
-    score = int(market.get("score", 0))
-    if direction == "CALL" and breadth == "positive":
-        evidence.append(ev("Market", "Market breadth", breadth, "pass", score, 0.60, True, "SPY/QQQ context supports bullish trades.", ds))
-    elif direction == "PUT" and breadth == "weak":
-        evidence.append(ev("Market", "Market breadth", breadth, "pass", score, 0.60, True, "Weak market context supports bearish trades.", ds))
-    elif breadth == "mixed":
-        evidence.append(ev("Market", "Market breadth", breadth, "warning", 45, 0.60, False, "Market context is mixed; confidence is reduced.", ds))
+    raw_score = int(market.get("score", 0) or 0)
+    aligned = (direction == "CALL" and breadth == "positive") or (direction == "PUT" and breadth == "weak")
+    opposed = (direction == "CALL" and breadth == "weak") or (direction == "PUT" and breadth == "positive")
+
+    if aligned:
+        directional_score = max(75, raw_score if direction == "CALL" else 100 - raw_score)
+        evidence.append(ev("Market", "Market alignment", f"{breadth} for {direction}", "pass", directional_score, 0.60, True, "Broad-market context supports the proposed direction.", ds))
+    elif opposed:
+        directional_score = 25
+        evidence.append(ev("Market", "Market alignment", f"{breadth} against {direction}", "warning", 25, 0.60, False, "Broad-market context opposes the proposed direction.", ds))
     else:
-        evidence.append(ev("Market", "Market breadth", breadth, "warning", 35, 0.60, False, "Market context does not strongly support the trade direction.", ds))
-    evidence.append(ev("Market", "SPY trend", market.get("spy_trend"), "info", 0, 0.20, True, "SPY trend is used as broad-market confirmation.", ds))
-    evidence.append(ev("Market", "QQQ trend", market.get("qqq_trend"), "info", 0, 0.20, True, "QQQ trend is used as growth/tech confirmation.", ds))
-    return max(0, min(100, score)), evidence, failures
+        directional_score = 52
+        evidence.append(ev("Market", "Market alignment", f"{breadth} for {direction}", "warning", 52, 0.60, False, "Broad-market context is mixed rather than strongly aligned.", ds))
+
+    evidence.append(ev("Market", "SPY trend", market.get("spy_trend"), "info", 0, 0.20, True, "SPY trend provides broad-market context.", ds))
+    evidence.append(ev("Market", "QQQ trend", market.get("qqq_trend"), "info", 0, 0.20, True, "QQQ trend provides growth/technology context.", ds))
+    return max(0, min(100, int(directional_score))), evidence, failures
 
 
-def score_risk(quote: Quote, contract: OptionContract | None, account_value: float, max_risk_percent: float, contracts: int) -> tuple[int, list[EvidenceItem], list[str]]:
+def score_risk(
+    quote: Quote,
+    contract: OptionContract | None,
+    account_value: float,
+    max_risk_percent: float,
+    contracts: int,
+    *,
+    planned_risk: float = 0.0,
+    absolute_max_loss: float = 0.0,
+    strategy_name: str = "Long option",
+) -> tuple[int, list[EvidenceItem], list[str]]:
     evidence: list[EvidenceItem] = []
     failures: list[str] = []
     ds = quote.data_source
+
     if quote.data_source != "yfinance_delayed":
         failures.append("Verified quote is unavailable.")
-        evidence.append(ev("Risk", "Quote quality", quote.data_source, "fail", -100, 0.30, False, "Current quote must be verified before a recommendation is allowed.", ds))
+        evidence.append(ev("Risk", "Quote quality", quote.data_source, "fail", -100, 0.25, False, "A verified quote is required.", ds))
     else:
-        evidence.append(ev("Risk", "Quote quality", quote.data_source, "pass", 20, 0.30, True, "Quote is from delayed live provider.", ds))
+        evidence.append(ev("Risk", "Quote quality", quote.data_source, "pass", 25, 0.25, True, "Quote is from the delayed live provider.", ds))
 
     if quote.volume >= MIN_PRICE_VOLUME:
-        evidence.append(ev("Risk", "Underlying volume", quote.volume, "pass", 20, 0.20, True, "Underlying volume meets minimum liquidity requirement.", ds))
+        evidence.append(ev("Risk", "Underlying volume", quote.volume, "pass", 20, 0.20, True, "Underlying volume meets the minimum liquidity requirement.", ds))
     else:
         failures.append(f"Underlying volume {quote.volume} is below {MIN_PRICE_VOLUME} minimum.")
         evidence.append(ev("Risk", "Underlying volume", quote.volume, "fail", -20, 0.20, False, "Underlying liquidity is too low.", ds))
 
+    risk_budget = round(account_value * (max_risk_percent / 100), 2)
     if contract is None or contracts < 1:
-        failures.append("Position size is zero under configured risk limits.")
-        evidence.append(ev("Risk", "Position sizing", contracts, "fail", -30, 0.30, False, "Configured account/risk limits do not allow even one contract.", ds))
+        failures.append(
+            f"No position fits the configured ${risk_budget:,.2f} risk budget. "
+            "Increase account value/risk only if that accurately reflects your real limits, or use a lower-cost defined-risk spread."
+        )
+        evidence.append(ev("Risk", "Position sizing", contracts, "fail", -35, 0.35, False, "The selected strategy cannot be sized within the configured risk budget.", ds))
     else:
-        evidence.append(ev("Risk", "Position sizing", contracts, "pass", 30, 0.30, True, f"Position size respects {max_risk_percent}% max-risk setting.", ds))
-    score = 100 if not failures else max(0, 50 - 15 * len(failures))
+        evidence.append(ev(
+            "Risk",
+            "Position sizing",
+            {
+                "contracts": contracts,
+                "planned_risk": round(planned_risk, 2),
+                "absolute_max_loss": round(absolute_max_loss, 2),
+                "risk_budget": risk_budget,
+                "strategy": strategy_name,
+            },
+            "pass",
+            35,
+            0.35,
+            True,
+            "Quantity fits the configured risk budget; full-premium or spread max loss remains visible.",
+            ds,
+        ))
+
+    score = 100 if not failures else max(0, 55 - 20 * len(failures))
     return score, evidence, failures

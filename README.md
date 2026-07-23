@@ -86,3 +86,7 @@ Qualified CALL/PUT recommendations now include a structured `suggested_order` ob
 ## Resilient Universal Ticker Search
 
 The current build treats autocomplete as optional. Exact ticker entries are independently verified through multiple delayed Yahoo Finance data paths with retries. Temporary provider failures return a provider-unavailable/NO-TRADE state instead of falsely claiming that a valid ticker does not exist. Common class-share and international ticker formats are supported, including `BRK.B`, `BRK-B`, `7203.T`, and `SHOP.TO`.
+
+## Recommendation qualification update
+
+The recommendation engine now supports user-configurable account/risk settings and defined-risk debit-spread fallback when a single long option cannot fit the configured risk budget. See `docs/RECOMMENDATION_QUALIFICATION_FIX.md`.
