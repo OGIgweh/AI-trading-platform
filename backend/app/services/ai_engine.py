@@ -11,9 +11,16 @@ from app.models.schemas import (
     ScoreBreakdown,
     SuggestedOptionsLeg,
     SuggestedOptionsOrder,
+    SuggestedEquityOrder,
 )
 from app.services.indicators import market_context_snapshot, technical_snapshot
-from app.services.market_data import get_option_chain, get_quote, normalize_symbol
+from app.services.market_data import (
+    get_option_chain,
+    get_quote,
+    normalize_symbol,
+    is_verified_quote_source,
+    is_verified_history_source,
+)
 from app.services.risk import (
     bid_ask_spread_pct,
     planned_loss_per_contract,
@@ -192,7 +199,7 @@ def _no_trade(
         raw_data=raw_data,
         data_quality=(
             "verified_live_delayed"
-            if raw_data.get("quote", {}).get("data_source") == "yfinance_delayed"
+            if is_verified_quote_source(raw_data.get("quote", {}).get("data_source"))
             else "insufficient_verified_data"
         ),
     )
@@ -242,11 +249,163 @@ def _data_quality_no_trade(req: AnalyzeRequest, symbol: str, quote) -> Recommend
     )
 
 
+
+def _equity_fallback_recommendation(
+    req: AnalyzeRequest,
+    symbol: str,
+    quote,
+    tech: dict,
+    market: dict,
+    direction: str,
+    technical_score: int,
+    all_evidence: list[EvidenceItem],
+    hard_failures: list[str],
+    raw_data: dict,
+) -> Recommendation:
+    """Produce a defined-risk stock setup when verified options data is unavailable.
+
+    The platform must not turn an options-provider outage into a $0 quote or an
+    automatic failure for all trading assistance. Equity recommendations still
+    require verified price history, market context, confidence, and position sizing.
+    """
+    market_score, market_evidence, market_failures = score_market(market, direction)
+    all_evidence.extend(market_evidence)
+    hard_failures.extend(market_failures)
+
+    atr = float(tech.get("atr") or 0)
+    entry = float(quote.price)
+    stop_distance = max(atr * 1.5, entry * 0.02)
+    risk_budget = req.account_value * req.max_risk_percent / 100
+    max_notional = req.account_value * 0.25
+    quantity_by_risk = int(risk_budget // stop_distance) if stop_distance > 0 else 0
+    quantity_by_notional = int(max_notional // entry) if entry > 0 else 0
+    quantity = max(0, min(quantity_by_risk, quantity_by_notional))
+    planned_risk = round(quantity * stop_distance, 2)
+    risk_score = 100 if quantity >= 1 else 0
+
+    all_evidence.append(EvidenceItem(
+        category="Options",
+        name="Options data availability",
+        value="unavailable",
+        signal="info",
+        score=0,
+        weight=0,
+        passed=False,
+        explanation="A verified option chain was unavailable, so the engine evaluated a stock setup instead of fabricating an options contract.",
+        data_source="options_unavailable",
+    ))
+    all_evidence.append(EvidenceItem(
+        category="Risk",
+        name="Equity position sizing",
+        value={
+            "shares": quantity,
+            "risk_budget": round(risk_budget, 2),
+            "planned_risk": planned_risk,
+            "max_notional": round(max_notional, 2),
+        },
+        signal="pass" if quantity >= 1 else "fail",
+        score=100 if quantity >= 1 else -100,
+        weight=0.15,
+        passed=quantity >= 1,
+        explanation="Share quantity is limited by both the configured risk budget and a 25% account-value notional cap.",
+        data_source=quote.data_source,
+    ))
+    if quantity < 1:
+        hard_failures.append("No stock position fits the configured risk and notional limits.")
+
+    confidence = round((technical_score * 0.60) + (market_score * 0.25) + (risk_score * 0.15))
+    if quote.data_source == "stooq_eod":
+        confidence = max(0, confidence - 4)
+    breakdown = ScoreBreakdown(
+        technical_score=technical_score,
+        options_score=0,
+        market_score=market_score,
+        risk_score=risk_score,
+        final_confidence=confidence,
+        threshold=req.min_confidence,
+    )
+    if confidence < req.min_confidence:
+        hard_failures.append(f"Confidence {confidence}% is below the configured {req.min_confidence}% threshold.")
+
+    is_bullish = direction == "CALL"
+    recommendation = "BUY" if is_bullish else "SHORT"
+    stop_loss = round(entry - stop_distance, 2) if is_bullish else round(entry + stop_distance, 2)
+    targets = (
+        [round(entry + stop_distance * 1.5, 2), round(entry + stop_distance * 2.5, 2)]
+        if is_bullish
+        else [round(entry - stop_distance * 1.5, 2), round(entry - stop_distance * 2.5, 2)]
+    )
+    raw_data.update({
+        "selected_strategy": "equity_fallback",
+        "planned_risk_dollars": planned_risk,
+        "blocking_failures": list(dict.fromkeys(hard_failures)),
+    })
+    if hard_failures:
+        return _no_trade(
+            symbol,
+            req.min_confidence,
+            "NO TRADE RECOMMENDED because the verified stock setup did not pass every confidence, market-context, and risk gate.",
+            list(dict.fromkeys(hard_failures)),
+            all_evidence,
+            raw_data,
+            breakdown,
+        )
+
+    equity_order = SuggestedEquityOrder(
+        strategy="Long Stock" if is_bullish else "Short Stock",
+        symbol=symbol,
+        action="BUY" if is_bullish else "SELL_SHORT",
+        quantity=quantity,
+        limit_price=round(entry, 2),
+        stop_loss=stop_loss,
+        profit_targets=targets,
+        estimated_amount=round(quantity * entry, 2),
+        planned_risk=planned_risk,
+        price_basis=(
+            "Latest completed daily price; verify a current quote before entry"
+            if quote.data_source == "stooq_eod"
+            else "Latest verified provider quote"
+        ),
+    )
+    return Recommendation(
+        symbol=symbol,
+        recommendation=recommendation,
+        confidence=confidence,
+        threshold=req.min_confidence,
+        trade_type="long_stock" if is_bullish else "short_stock",
+        direction="BULLISH" if is_bullish else "BEARISH",
+        entry_price=round(entry, 2),
+        stop_loss=stop_loss,
+        profit_targets=targets,
+        position_size=quantity,
+        max_risk_dollars=planned_risk,
+        risk_level="Defined by stop and position size",
+        expected_holding_period="2-15 trading days",
+        explanation=(
+            "A stock setup qualifies from verified technical, market-context, and risk evidence. "
+            "Options data was unavailable, so no options contract was invented."
+        ),
+        risks=[
+            "A stop order can fill below/above the intended price during gaps.",
+            "Verify the latest quote before entry, especially when the source is end-of-day data.",
+        ],
+        invalidation_conditions=[
+            "Price closes through the stop level.",
+            "EMA/MACD alignment reverses against the setup.",
+            "Broad-market context turns materially against the setup.",
+        ],
+        evidence=all_evidence,
+        score_breakdown=breakdown,
+        suggested_equity_order=equity_order,
+        raw_data=raw_data,
+        data_quality="verified_market_data",
+    )
+
 def analyze_trade(req: AnalyzeRequest) -> Recommendation:
     symbol = normalize_symbol(req.symbol)
     threshold = req.min_confidence
     quote = get_quote(symbol)
-    if quote.data_source != "yfinance_delayed" or quote.price <= 0:
+    if not is_verified_quote_source(quote.data_source) or quote.price <= 0:
         return _data_quality_no_trade(req, symbol, quote)
 
     tech = technical_snapshot(symbol)
@@ -282,7 +441,7 @@ def analyze_trade(req: AnalyzeRequest) -> Recommendation:
         direction = inferred_direction
 
     if direction == "NO_TRADE":
-        technical_verified = tech.get("data_source") == "yfinance_delayed"
+        technical_verified = is_verified_history_source(tech.get("data_source"))
         displayed_confidence = technical_score if technical_verified else 0
         breakdown = ScoreBreakdown(
             technical_score=technical_score,
@@ -306,6 +465,20 @@ def analyze_trade(req: AnalyzeRequest) -> Recommendation:
             reasons = hard_failures or [tech.get("error", "Verified price history is unavailable.")]
         raw_data["blocking_failures"] = reasons
         return _no_trade(symbol, threshold, explanation, reasons, all_evidence, raw_data, breakdown)
+
+    if not chain:
+        return _equity_fallback_recommendation(
+            req,
+            symbol,
+            quote,
+            tech,
+            market,
+            direction,
+            technical_score,
+            all_evidence,
+            hard_failures,
+            raw_data,
+        )
 
     single_contract = _best_single_contract(chain, direction, req.account_value, req.max_risk_percent)
     single_mid = _mid(single_contract) if single_contract else 0.0
@@ -410,8 +583,8 @@ def analyze_trade(req: AnalyzeRequest) -> Recommendation:
         threshold=threshold,
     )
 
-    if quote.data_source != "yfinance_delayed" or tech.get("data_source") != "yfinance_delayed" or market.get("data_source") != "yfinance_delayed":
-        hard_failures.append("Live delayed data was not available for every required evidence category.")
+    if not is_verified_quote_source(quote.data_source) or not is_verified_history_source(tech.get("data_source")) or not (is_verified_history_source(market.get("data_source")) or market.get("data_source") == "mixed_verified_providers"):
+        hard_failures.append("Verified market data was not available for every required evidence category.")
     if confidence < threshold:
         hard_failures.append(f"Confidence {confidence}% is below the configured {threshold}% threshold.")
 
@@ -556,7 +729,7 @@ def analyze_trade(req: AnalyzeRequest) -> Recommendation:
         score_breakdown=breakdown,
         suggested_order=suggested_order,
         raw_data=raw_data,
-        data_quality="verified_live_delayed",
+        data_quality="verified_market_data",
     )
 
 

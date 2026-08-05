@@ -37,6 +37,8 @@ const ANALYSIS_SETTINGS_STORAGE_KEY = 'ai-trading-platform-analysis-settings';
 const DEFAULT_ANALYSIS_SETTINGS = { accountValue: 10000, minConfidence: 75, maxRiskPercent: 1 };
 
 const CHART_PERIODS = ['1mo', '3mo', '6mo', '1y', '5y'];
+const VERIFIED_DATA_SOURCES = new Set(['tradier_realtime', 'tradier_delayed', 'yfinance_delayed', 'stooq_eod', 'mixed_verified_providers']);
+const isVerifiedSource = (source) => VERIFIED_DATA_SOURCES.has(String(source || '').toLowerCase());
 
 const money = (value) => {
   const parsed = Number(value);
@@ -88,6 +90,7 @@ function Badge({ rec }) {
 
 function RecommendationCard({ r, onSelect }) {
   const order = r.suggested_order;
+  const equityOrder = r.suggested_equity_order;
   return (
     <button className="recCard" onClick={() => onSelect(r.symbol)}>
       <div className="recTop">
@@ -107,6 +110,13 @@ function RecommendationCard({ r, onSelect }) {
           <span>{order.quantity} × {order.underlying_symbol}</span>
           <span>{formatDate(order.expiration)}</span>
           <span>{(order.leg_count || 1) > 1 ? 'Net debit' : 'Limit'} {money(order.limit_price)}</span>
+        </div>
+      ) : equityOrder ? (
+        <div className="compactOrder">
+          <span>{equityOrder.strategy}</span>
+          <span>{equityOrder.quantity} shares</span>
+          <span>{equityOrder.action.replaceAll('_', ' ')}</span>
+          <span>Limit {money(equityOrder.limit_price)}</span>
         </div>
       ) : (
         <p>{r.explanation}</p>
@@ -238,6 +248,68 @@ function SuggestedOrderTicket({ rec, currentQuote }) {
     } catch {
       setCopied('');
     }
+  }
+
+  const equityOrder = rec?.suggested_equity_order;
+  if (equityOrder) {
+    const actionDisplay = equityOrder.action.replaceAll('_', ' ');
+    const equityTicketText = [
+      `Symbol: ${equityOrder.symbol}`,
+      `Action: ${actionDisplay}`,
+      `Quantity: ${equityOrder.quantity} shares`,
+      `Order Type: ${equityOrder.order_type}`,
+      `Limit Price: ${money(equityOrder.limit_price)}`,
+      `Timing: Day only`,
+      `Stop Loss: ${money(equityOrder.stop_loss)}`,
+      `Profit Target 1: ${money(equityOrder.profit_targets?.[0])}`,
+      `Profit Target 2: ${money(equityOrder.profit_targets?.[1])}`,
+    ].join('\n');
+    return (
+      <section className="orderTicket" aria-label="Suggested stock order ticket">
+        <div className="orderTicketTop">
+          <div>
+            <span className="eyebrow">BROKER ENTRY FORMAT</span>
+            <h3>Suggested Stock Order</h3>
+            <p>Generated because verified stock data qualified but a verified options chain was unavailable.</p>
+          </div>
+          <span className="paperOnlyBadge">Review required</span>
+        </div>
+        <div className="underlyingStrip">
+          <div><span>Symbol</span><strong>{equityOrder.symbol}</strong></div>
+          <div><span>Strategy</span><strong>{equityOrder.strategy}</strong></div>
+          <div><span>Market price</span><strong>{money(currentQuote?.price || equityOrder.limit_price)}</strong></div>
+          <div><span>Holding period</span><strong>{rec.expected_holding_period}</strong></div>
+        </div>
+        <div className="orderSettings">
+          <TicketRow label="Action" value={actionDisplay} copyValue={actionDisplay} onCopy={copyValue} copied={copied} />
+          <TicketRow label="Quantity" value={`${equityOrder.quantity} shares`} copyValue={equityOrder.quantity} onCopy={copyValue} copied={copied} />
+          <TicketRow label="Order Type" value="Limit" />
+          <TicketRow label="Limit Price" value={money(equityOrder.limit_price)} help={equityOrder.price_basis} copyValue={Number(equityOrder.limit_price).toFixed(2)} onCopy={copyValue} copied={copied} />
+          <TicketRow label="Timing" value="Day only" />
+        </div>
+        <div className="exitPlan">
+          <div><span>Suggested stop</span><strong>{money(equityOrder.stop_loss)}</strong></div>
+          <div><span>Profit target 1</span><strong>{money(equityOrder.profit_targets?.[0])}</strong></div>
+          <div><span>Profit target 2</span><strong>{money(equityOrder.profit_targets?.[1])}</strong></div>
+          <div><span>Planned risk</span><strong>{money(equityOrder.planned_risk)}</strong></div>
+        </div>
+        <div className="estimatedAmount">
+          <div>
+            <span>Estimated Amount</span>
+            <strong>{money(equityOrder.estimated_amount)}</strong>
+            <small>Verify the current quote, buying power, and short availability in your broker before submitting.</small>
+          </div>
+          <button className="copyTicketButton" onClick={() => copyValue(equityTicketText, 'Full ticket')}>
+            {copied === 'Full ticket' ? <Check size={18} /> : <Clipboard size={18} />}
+            {copied === 'Full ticket' ? 'Copied' : 'Copy order ticket'}
+          </button>
+        </div>
+        <div className="ticketWarning">
+          <ShieldCheck size={20} />
+          <p><b>Verify before submitting:</b> this platform does not place orders. End-of-day fallback prices are not intraday executable quotes.</p>
+        </div>
+      </section>
+    );
   }
 
   if (!order) {
@@ -833,7 +905,11 @@ function App() {
                 <span><small>Volume</small><b>{currentQuote.volume?.toLocaleString()}</b></span>
                 <span><small>Data source</small><b>{currentQuote.data_source}</b></span>
               </div>
-              {currentQuote.market_status !== 'OPEN' && (
+              {currentQuote.data_source === 'stooq_eod' ? (
+                <p className="lastAvailableMessage">
+                  Independent fallback active: this is the latest completed daily price, not a live intraday quote. Verify the current broker quote before entry.
+                </p>
+              ) : currentQuote.market_status !== 'OPEN' && (
                 <p className="lastAvailableMessage">
                   The regular market is closed. Price, change, volume, ranges, and chart use the latest available completed market data.
                 </p>
@@ -860,7 +936,7 @@ function App() {
 
               <p>{rec.explanation}</p>
               <div className="analysisHealth" aria-label="Analysis data status">
-                <span className={rec.raw_data?.technical?.data_source === 'yfinance_delayed' ? 'verified' : 'unavailable'}>
+                <span className={isVerifiedSource(rec.raw_data?.technical?.data_source) ? 'verified' : 'unavailable'}>
                   Technical data: {rec.raw_data?.technical?.data_source || 'unavailable'}
                 </span>
                 <span>History: {rec.raw_data?.technical?.history_bars ?? 0} daily bars</span>
@@ -927,6 +1003,9 @@ function App() {
                 </tr>
               </thead>
               <tbody>
+                {!chain.length && (
+                  <tr><td colSpan="9">No verified option chain is available. The engine may still evaluate a stock setup from verified price data.</td></tr>
+                )}
                 {chain.map((contract) => (
                   <tr key={contract.symbol}>
                     <td>{contract.contract_type}</td>
@@ -951,14 +1030,14 @@ function App() {
           <p>Portfolio risk score: <b>Medium</b></p>
           <p>Max risk per trade: <b>1%</b></p>
           <p>Live execution: <b>Disabled</b></p>
-          <p>Market data: <b>Live delayed yfinance required for recommendations</b></p>
+          <p>Market data: <b>Tradier when configured; independent completed-daily fallback otherwise</b></p>
           <p>Emergency stop: <b>Ready</b></p>
         </Card>
         <Card title="Implementation Notice" icon={<DollarSign />}>
           <p>
-            The order ticket is generated only for a qualified recommendation. It translates the
-            selected contract into broker-entry fields; it does not connect to or place an order
-            with Charles Schwab.
+            A qualified setup may generate an options ticket or a stock ticket. Options require a
+            verified option chain; the platform never invents contracts. It does not connect to or
+            place an order with Charles Schwab.
           </p>
         </Card>
       </section>

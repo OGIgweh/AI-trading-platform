@@ -5,11 +5,11 @@ from functools import lru_cache
 from typing import Any
 
 from app.core.config import settings
-from app.services.market_data import get_price_history, normalize_symbol
+from app.services.market_data import get_price_history, normalize_symbol, is_verified_history_source
 
 
 def _provider_enabled() -> bool:
-    return settings.market_data_provider.lower() in {"auto", "yfinance"}
+    return settings.market_data_provider.lower() in {"auto", "yfinance", "tradier", "stooq"}
 
 
 def _num(value: Any, default: float = 0.0) -> float:
@@ -87,6 +87,7 @@ def _technical_cached(symbol: str, cache_bucket: int):
             ),
         }
 
+    data_source = str(frame.attrs.get("data_source") or "verified_daily")
     frame = frame.dropna(subset=["Close", "High", "Low", "Volume"])
     close = frame["Close"]
     if len(close) < 60:
@@ -160,7 +161,7 @@ def _technical_cached(symbol: str, cache_bucket: int):
         "volume_ratio": volume_ratio,
         "history_period": "1y",
         "history_bars": int(len(frame)),
-        "data_source": "yfinance_delayed",
+        "data_source": data_source,
     }
 
 
@@ -183,7 +184,7 @@ def market_context_snapshot():
     spy = technical_snapshot("SPY")
     qqq = technical_snapshot("QQQ")
     vix = technical_snapshot("^VIX")
-    live = spy.get("data_source") == "yfinance_delayed" and qqq.get("data_source") == "yfinance_delayed"
+    live = is_verified_history_source(spy.get("data_source")) and is_verified_history_source(qqq.get("data_source"))
     if not live:
         unavailable_status = (
             "provider_unavailable"
@@ -207,5 +208,5 @@ def market_context_snapshot():
         "vix_state": "elevated" if vix.get("trend") == "bullish" else "normal_or_unavailable",
         "market_breadth": "positive" if score >= 65 else "weak" if score <= 45 else "mixed",
         "score": int(score),
-        "data_source": "yfinance_delayed",
+        "data_source": spy.get("data_source") if spy.get("data_source") == qqq.get("data_source") else "mixed_verified_providers",
     }

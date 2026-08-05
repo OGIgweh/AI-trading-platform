@@ -13,6 +13,17 @@ class Settings(BaseSettings):
     market_data_provider: str = "auto"
     market_data_cache_seconds: int = 60
     market_data_retries: int = 2
+    market_data_timeout_seconds: float = 12.0
+
+    # Optional production-grade provider. Tradier supplies stock/ETF quotes,
+    # historical prices, and option chains. Sandbox tokens return delayed data.
+    tradier_api_token: str = ""
+    tradier_sandbox: bool = True
+    tradier_base_url: str = ""
+
+    # Independent keyless fallback for completed daily US stock/ETF prices.
+    # This prevents a Yahoo/Render rate limit from turning every valid quote into $0.
+    stooq_fallback_enabled: bool = True
 
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
 

@@ -61,6 +61,7 @@ class OptionContract(BaseModel):
     spread_percent: float
     expiration: Optional[str] = None
     days_to_expiration: Optional[int] = None
+    data_source: str = "unknown_options"
 
 
 class PortfolioSummary(BaseModel):
@@ -145,6 +146,24 @@ class SuggestedOptionsOrder(BaseModel):
     live_submission_enabled: bool = False
 
 
+class SuggestedEquityOrder(BaseModel):
+    asset_class: Literal["EQUITY"] = "EQUITY"
+    strategy: str
+    symbol: str
+    action: Literal["BUY", "SELL_SHORT"]
+    quantity: int
+    order_type: Literal["LIMIT"] = "LIMIT"
+    limit_price: float
+    timing: Literal["DAY"] = "DAY"
+    stop_loss: float
+    profit_targets: List[float] = Field(default_factory=list)
+    estimated_amount: float
+    planned_risk: float
+    price_basis: str = "Latest verified price"
+    review_required: bool = True
+    live_submission_enabled: bool = False
+
+
 class Recommendation(BaseModel):
     symbol: str
     recommendation: str
@@ -166,6 +185,7 @@ class Recommendation(BaseModel):
     evidence: List[EvidenceItem] = Field(default_factory=list)
     score_breakdown: ScoreBreakdown = Field(default_factory=ScoreBreakdown)
     suggested_order: Optional[SuggestedOptionsOrder] = None
+    suggested_equity_order: Optional[SuggestedEquityOrder] = None
     raw_data: Dict[str, Any] = Field(default_factory=dict)
     data_quality: str = "unverified"
 

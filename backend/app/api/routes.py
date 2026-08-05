@@ -10,6 +10,7 @@ from app.services.market_data import (
     get_quote_lookup,
     get_chart_history,
     search_instruments_with_status,
+    provider_status_detail,
 )
 from app.services.portfolio import get_portfolio_summary
 
@@ -33,6 +34,11 @@ def portfolio_summary():
 @router.get("/market/status")
 def market_clock_status():
     return market_status_detail()
+
+
+@router.get("/market/providers")
+def market_provider_status():
+    return provider_status_detail()
 
 
 @router.get("/market/search")

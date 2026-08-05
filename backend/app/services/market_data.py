@@ -10,6 +10,15 @@ from app.core.config import settings
 from app.models.schemas import InstrumentSearchResult, OptionContract, Quote
 from app.services.market_clock import market_status
 from app.services.risk import bid_ask_spread_pct
+from app.services.provider_adapters import (
+    fetch_stooq_history,
+    fetch_tradier_history,
+    fetch_tradier_options,
+    fetch_tradier_quote,
+    fetch_tradier_search,
+    quote_from_history,
+    tradier_enabled,
+)
 
 SAMPLE_QUOTES = {
     "AAPL": {"price": 214.35, "change": 1.26, "change_percent": 0.59, "volume": 58_234_000},
@@ -109,7 +118,28 @@ def is_valid_symbol_format(symbol: str) -> bool:
 
 
 def _provider_enabled() -> bool:
-    return settings.market_data_provider.lower() in {"auto", "yfinance"}
+    return settings.market_data_provider.lower() in {"auto", "yfinance", "tradier", "stooq"}
+
+
+def is_verified_quote_source(source: str) -> bool:
+    return str(source or "").lower() in {
+        "tradier_realtime",
+        "tradier_delayed",
+        "yfinance_delayed",
+        "stooq_eod",
+    }
+
+
+def is_verified_history_source(source: str) -> bool:
+    return is_verified_quote_source(source)
+
+
+def is_verified_options_source(source: str) -> bool:
+    return str(source or "").lower() in {
+        "tradier_realtime_options",
+        "tradier_delayed_options",
+        "yfinance_delayed_options",
+    }
 
 
 def _market_status() -> str:
@@ -281,7 +311,7 @@ def _exact_search_state(yf: Any, symbol: str) -> bool | None:
 
 
 @lru_cache(maxsize=512)
-def _lookup_quote_cached(requested_symbol: str, cache_bucket: int) -> QuoteLookup:
+def _lookup_yfinance_quote_cached(requested_symbol: str, cache_bucket: int) -> QuoteLookup:
     del cache_bucket
     normalized = normalize_symbol(requested_symbol)
     unavailable = Quote(
@@ -411,6 +441,81 @@ def _lookup_quote_cached(requested_symbol: str, cache_bucket: int) -> QuoteLooku
     )
 
 
+
+@lru_cache(maxsize=512)
+def _lookup_quote_cached(requested_symbol: str, cache_bucket: int) -> QuoteLookup:
+    normalized = normalize_symbol(requested_symbol)
+    if not normalized or not is_valid_symbol_format(normalized):
+        quote = Quote(
+            symbol=normalized or str(requested_symbol).upper().strip(),
+            price=0.0,
+            change=0.0,
+            change_percent=0.0,
+            volume=0,
+            market_status=_market_status(),
+            data_source="invalid_symbol",
+        )
+        return QuoteLookup(quote, "invalid_format", str(requested_symbol), normalized, "Ticker format is invalid.")
+
+    mode = settings.market_data_provider.lower()
+    provider_errors: list[str] = []
+
+    # A configured Tradier token is the preferred production path because it
+    # supplies quotes, history, and options from a documented brokerage API.
+    if mode in {"auto", "tradier"} and tradier_enabled():
+        for candidate in symbol_candidates(normalized):
+            try:
+                quote = fetch_tradier_quote(candidate)
+                if quote:
+                    return QuoteLookup(quote, "ok", str(requested_symbol), quote.symbol, "Verified Tradier quote retrieved.")
+            except Exception as exc:
+                provider_errors.append(f"Tradier: {exc}")
+
+    # In auto mode, use the independent completed-daily fallback before Yahoo.
+    # Render data-center IPs can be temporarily rate-limited by Yahoo; trying
+    # Stooq first prevents every valid ticker from becoming a $0 quote.
+    if mode in {"auto", "stooq"} or settings.stooq_fallback_enabled:
+        try:
+            frame = fetch_stooq_history(normalized, "1y")
+            quote = quote_from_history(normalized, frame, "stooq_eod") if frame is not None else None
+            if quote:
+                return QuoteLookup(
+                    quote,
+                    "ok",
+                    str(requested_symbol),
+                    normalized,
+                    "Latest completed daily quote retrieved from the Stooq fallback.",
+                )
+        except Exception as exc:
+            provider_errors.append(f"Stooq: {exc}")
+
+    yahoo_result: QuoteLookup | None = None
+    if mode in {"auto", "yfinance"}:
+        yahoo_result = _lookup_yfinance_quote_cached(normalized, cache_bucket)
+        if yahoo_result.status == "ok":
+            return yahoo_result
+        provider_errors.append(f"Yahoo: {yahoo_result.message}")
+
+    unavailable = Quote(
+        symbol=normalized,
+        price=0.0,
+        change=0.0,
+        change_percent=0.0,
+        volume=0,
+        market_status=_market_status(),
+        data_source="provider_unavailable",
+    )
+    if yahoo_result and yahoo_result.status == "not_found" and len(provider_errors) == 1:
+        return yahoo_result
+    detail = "; ".join(provider_errors[-3:]) or "No configured provider returned data."
+    return QuoteLookup(
+        unavailable,
+        "provider_unavailable",
+        str(requested_symbol),
+        normalized,
+        f"All configured market-data providers were unavailable. {detail}",
+    )
+
 def get_quote_lookup(symbol: str) -> QuoteLookup:
     normalized = normalize_symbol(symbol)
     bucket = int(datetime.now().timestamp() // max(15, settings.market_data_cache_seconds))
@@ -483,8 +588,19 @@ def search_instruments_with_status(query: str, limit: int = 8) -> tuple[list[Ins
     if not clean_query or not _provider_enabled():
         return [], "disabled"
 
-    bucket = int(datetime.now().timestamp() // max(60, settings.market_data_cache_seconds * 5))
-    results, provider_status = _yf_search_cached(clean_query, max(1, min(limit, 12)), bucket)
+    results: list[InstrumentSearchResult] = []
+    provider_status = "provider_unavailable"
+    if settings.market_data_provider.lower() in {"auto", "tradier"} and tradier_enabled():
+        try:
+            results = fetch_tradier_search(clean_query, max(1, min(limit, 12)))
+            if results:
+                provider_status = "ok"
+        except Exception:
+            results = []
+
+    if not results and settings.market_data_provider.lower() in {"auto", "yfinance"}:
+        bucket = int(datetime.now().timestamp() // max(60, settings.market_data_cache_seconds * 5))
+        results, provider_status = _yf_search_cached(clean_query, max(1, min(limit, 12)), bucket)
 
     # Search is autocomplete only. Add a direct-ticker choice when the input has
     # a valid ticker shape, even if Yahoo's search endpoint is empty. Analysis
@@ -509,7 +625,7 @@ def search_instruments(query: str, limit: int = 8) -> list[InstrumentSearchResul
     return search_instruments_with_status(query, limit)[0]
 
 
-def _fetch_price_history_uncached(normalized: str, provider_period: str, interval: str):
+def _fetch_yfinance_price_history_uncached(normalized: str, provider_period: str, interval: str):
     """Fetch OHLCV data using progressively simpler yfinance calls.
 
     Keeping this function separate from the public cached wrapper prevents the
@@ -541,6 +657,7 @@ def _fetch_price_history_uncached(normalized: str, provider_period: str, interva
                 frame = ticker.history(**kwargs)
                 received_provider_response = True
                 if frame is not None and not frame.empty:
+                    frame.attrs["data_source"] = "yfinance_delayed"
                     return frame, candidate, "ok"
             except Exception as exc:
                 transient = transient or _is_transient_error(exc)
@@ -569,6 +686,7 @@ def _fetch_price_history_uncached(normalized: str, provider_period: str, interva
                 received_provider_response = True
                 frame = _extract_history_frame(frame, candidate)
                 if frame is not None and not frame.empty:
+                    frame.attrs["data_source"] = "yfinance_delayed"
                     return frame, candidate, "ok"
             except Exception as exc:
                 transient = transient or _is_transient_error(exc)
@@ -577,6 +695,36 @@ def _fetch_price_history_uncached(normalized: str, provider_period: str, interva
         return None, normalized, "provider_unavailable"
     return None, normalized, "not_found"
 
+
+
+def _fetch_price_history_uncached(normalized: str, provider_period: str, interval: str):
+    mode = settings.market_data_provider.lower()
+
+    if mode in {"auto", "tradier"} and tradier_enabled() and interval == "1d":
+        try:
+            frame = fetch_tradier_history(normalized, provider_period)
+            if frame is not None and not frame.empty:
+                return frame, normalized, "ok"
+        except Exception:
+            pass
+
+    # Prefer the independent daily provider in auto mode. It gives the chart
+    # and indicator engine a reliable completed-price series even if Yahoo has
+    # rate-limited the Render service IP.
+    if (mode in {"auto", "stooq"} or settings.stooq_fallback_enabled) and interval == "1d":
+        try:
+            frame = fetch_stooq_history(normalized, provider_period)
+            if frame is not None and not frame.empty:
+                return frame, normalized, "ok"
+        except Exception:
+            pass
+
+    if mode in {"auto", "yfinance"}:
+        frame, canonical, status = _fetch_yfinance_price_history_uncached(normalized, provider_period, interval)
+        if status == "ok" and frame is not None and not frame.empty:
+            return frame, canonical, status
+
+    return None, normalized, "provider_unavailable"
 
 @lru_cache(maxsize=512)
 def _get_price_history_cached(
@@ -737,6 +885,7 @@ def _sample_option_chain(symbol: str) -> list[OptionContract]:
                     spread_percent=bid_ask_spread_pct(bid, ask),
                     expiration=sample_expiration.isoformat(),
                     days_to_expiration=30,
+                    data_source="sample_options",
                 )
             )
     return rows
@@ -811,6 +960,7 @@ def _yf_option_chain_cached(symbol: str, cache_bucket: int) -> list[OptionContra
                                 spread_percent=bid_ask_spread_pct(bid, ask),
                                 expiration=expiration,
                                 days_to_expiration=days_to_expiration,
+                                data_source="yfinance_delayed_options",
                             )
                         )
                 if rows:
@@ -825,10 +975,48 @@ def _yf_option_chain_cached(symbol: str, cache_bucket: int) -> list[OptionContra
 
 
 def get_option_chain(symbol: str) -> list[OptionContract]:
-    normalized = normalize_symbol(symbol)
-    if settings.market_data_provider.lower() == "sample":
-        return _sample_option_chain(normalized)
-    if _provider_enabled() and is_valid_symbol_format(normalized):
+    symbol = normalize_symbol(symbol)
+    mode = settings.market_data_provider.lower()
+    if mode == "sample":
+        return _sample_option_chain(symbol)
+
+    if mode in {"auto", "tradier"} and tradier_enabled():
+        try:
+            rows = fetch_tradier_options(symbol)
+            if rows:
+                return rows
+        except Exception:
+            pass
+
+    if mode in {"auto", "yfinance"}:
         bucket = int(datetime.now().timestamp() // max(60, settings.market_data_cache_seconds * 3))
-        return _yf_option_chain_cached(normalized, bucket)
+        live = _yf_option_chain_cached(symbol, bucket)
+        if live:
+            return live
+
+    # No option data is safer than fabricating contracts. The AI engine can
+    # still produce an equity setup from verified price/history data.
     return []
+
+
+
+def provider_status_detail() -> dict[str, Any]:
+    mode = settings.market_data_provider.lower()
+    priority = []
+    if mode in {"auto", "tradier"} and tradier_enabled():
+        priority.append("tradier")
+    if mode in {"auto", "stooq"} or settings.stooq_fallback_enabled:
+        priority.append("stooq_eod")
+    if mode in {"auto", "yfinance"}:
+        priority.append("yfinance")
+    return {
+        "configured_mode": mode,
+        "tradier_configured": tradier_enabled(),
+        "tradier_environment": "sandbox_delayed" if settings.tradier_sandbox else "production_realtime",
+        "stooq_fallback_enabled": bool(settings.stooq_fallback_enabled),
+        "provider_priority": priority,
+        "note": (
+            "Tradier is recommended for reliable quotes and options. "
+            "Without a Tradier token, the platform uses Stooq completed daily prices and Yahoo best-effort options data."
+        ),
+    }

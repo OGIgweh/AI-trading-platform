@@ -1,6 +1,6 @@
 # AI Trading Platform Starter
 
-A working full-stack starter for a risk-first AI trading assistant.
+A full-stack, risk-first trading decision-support platform with resilient market-data fallbacks.
 
 ## Includes
 
@@ -8,7 +8,8 @@ A working full-stack starter for a risk-first AI trading assistant.
 - React web dashboard
 - Expo React Native mobile app
 - AI decision engine that defaults to `NO_TRADE`
-- Sample market data and options chain data
+- Multi-provider stock/ETF quotes and history
+- Options chains from Tradier when configured, with Yahoo best-effort fallback
 - Order preview with live trading blocked by default
 - Render deployment helpers
 - EAS mobile build configuration
@@ -75,7 +76,7 @@ This build includes backend-powered recommendation endpoints:
 
 The web dashboard now displays a Recent AI Recommendations panel, confidence scores, entry/stop/targets when a setup qualifies, risk notes, and the evidence payload used to generate the decision.
 
-Important: this build still uses sample market data until you connect a real market data provider. Live trading remains disabled.
+The default `auto` mode uses an independent completed-daily fallback so valid tickers do not become `$0.00` when Yahoo rate-limits the Render service. Configure a Tradier token for reliable delayed/real-time quotes and option chains. Live trading remains disabled.
 
 ## Broker-Entry Options Ticket
 
@@ -90,3 +91,8 @@ The current build treats autocomplete as optional. Exact ticker entries are inde
 ## Recommendation qualification update
 
 The recommendation engine now supports user-configurable account/risk settings and defined-risk debit-spread fallback when a single long option cannot fit the configured risk budget. See `docs/RECOMMENDATION_QUALIFICATION_FIX.md`.
+
+
+## Market-data reliability update
+
+The backend no longer treats Yahoo Finance as a single point of failure. In `auto` mode it prefers Tradier when configured, uses Stooq completed daily data as an independent keyless fallback, and keeps Yahoo as a best-effort secondary source. The UI clearly identifies end-of-day fallback data. If options are unavailable but verified stock data qualifies, the engine may produce a defined-risk stock ticket instead of inventing an options contract. See `docs/MARKET_DATA_PROVIDER_FALLBACK_FIX.md`.

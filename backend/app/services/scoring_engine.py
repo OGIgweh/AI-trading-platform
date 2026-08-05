@@ -5,6 +5,7 @@ from typing import Any, List
 
 from app.models.schemas import EvidenceItem, OptionContract, Quote, ScoreBreakdown
 from app.services.risk import bid_ask_spread_pct
+from app.services.market_data import is_verified_history_source, is_verified_quote_source, is_verified_options_source
 
 # Preferred liquidity thresholds. Missing one preferred threshold is a warning;
 # critically illiquid contracts remain hard failures.
@@ -55,7 +56,7 @@ def score_technical(tech: dict) -> tuple[int, str, list[EvidenceItem], list[str]
     evidence: list[EvidenceItem] = []
     failures: list[str] = []
     ds = tech.get("data_source", "unknown")
-    if ds != "yfinance_delayed":
+    if not is_verified_history_source(ds):
         failures.append("Verified historical price data is unavailable.")
         return 0, "NO_TRADE", [
             ev(
@@ -158,7 +159,7 @@ def score_options(contract: OptionContract | None, direction: str) -> tuple[int,
     evidence: list[EvidenceItem] = []
     failures: list[str] = []
     warnings: list[str] = []
-    ds = "yfinance_delayed_options"
+    ds = contract.data_source if contract is not None else "options_unavailable"
     if contract is None:
         failures.append(f"No usable {direction} option contract was found.")
         evidence.append(ev("Options", "Contract availability", None, "fail", -100, 1, False, "A usable options contract is required before a recommendation can qualify.", ds))
@@ -229,7 +230,7 @@ def score_market(market: dict, direction: str) -> tuple[int, list[EvidenceItem],
     evidence: list[EvidenceItem] = []
     failures: list[str] = []
     ds = market.get("data_source", "unknown")
-    if ds != "yfinance_delayed":
+    if not (is_verified_history_source(ds) or ds == "mixed_verified_providers"):
         failures.append("Verified SPY/QQQ market context is unavailable.")
         evidence.append(ev("Market", "Market context", ds, "fail", -100, 1, False, "Broad-market context is required before qualification.", ds))
         return 0, evidence, failures
@@ -269,11 +270,12 @@ def score_risk(
     failures: list[str] = []
     ds = quote.data_source
 
-    if quote.data_source != "yfinance_delayed":
+    if not is_verified_quote_source(quote.data_source):
         failures.append("Verified quote is unavailable.")
         evidence.append(ev("Risk", "Quote quality", quote.data_source, "fail", -100, 0.25, False, "A verified quote is required.", ds))
     else:
-        evidence.append(ev("Risk", "Quote quality", quote.data_source, "pass", 25, 0.25, True, "Quote is from the delayed live provider.", ds))
+        freshness = "real-time/delayed" if quote.data_source.startswith("tradier") or quote.data_source.startswith("yfinance") else "latest completed daily"
+        evidence.append(ev("Risk", "Quote quality", quote.data_source, "pass", 25, 0.25, True, f"Quote is verified {freshness} market data.", ds))
 
     if quote.volume >= MIN_PRICE_VOLUME:
         evidence.append(ev("Risk", "Underlying volume", quote.volume, "pass", 20, 0.20, True, "Underlying volume meets the minimum liquidity requirement.", ds))
