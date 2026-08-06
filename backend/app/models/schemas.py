@@ -5,6 +5,7 @@ from pydantic import BaseModel, Field
 class AnalyzeRequest(BaseModel):
     symbol: str = Field(default="AAPL", min_length=1, max_length=24)
     account_value: float = Field(default=10000, gt=0)
+    asset_mode: Literal["options", "stock", "auto"] = "options"
     strategy: str = "auto"
     min_confidence: int = Field(default=75, ge=1, le=100)
     max_risk_percent: float = Field(default=1.0, gt=0, le=5)
@@ -13,6 +14,7 @@ class AnalyzeRequest(BaseModel):
 class RecommendationsRequest(BaseModel):
     symbols: List[str] = Field(default_factory=lambda: ["AAPL", "MSFT", "NVDA", "SPY", "QQQ"])
     account_value: float = Field(default=10000, gt=0)
+    asset_mode: Literal["options", "stock", "auto"] = "options"
     min_confidence: int = Field(default=75, ge=1, le=100)
     max_risk_percent: float = Field(default=1.0, gt=0, le=5)
     include_no_trade: bool = True

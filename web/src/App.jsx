@@ -34,7 +34,7 @@ import './style.css';
 const DEFAULT_SYMBOLS = ['AAPL', 'MSFT', 'NVDA', 'SPY', 'QQQ'];
 const WATCHLIST_STORAGE_KEY = 'ai-trading-platform-symbols';
 const ANALYSIS_SETTINGS_STORAGE_KEY = 'ai-trading-platform-analysis-settings';
-const DEFAULT_ANALYSIS_SETTINGS = { accountValue: 10000, minConfidence: 75, maxRiskPercent: 1 };
+const DEFAULT_ANALYSIS_SETTINGS = { accountValue: 10000, minConfidence: 75, maxRiskPercent: 1, analysisMode: 'options' };
 
 const CHART_PERIODS = ['1mo', '3mo', '6mo', '1y', '5y'];
 const VERIFIED_DATA_SOURCES = new Set(['tradier_realtime', 'tradier_delayed', 'yahoo_chart_delayed', 'yfinance_delayed', 'stooq_eod', 'mixed_verified_providers']);
@@ -489,6 +489,9 @@ function App() {
         accountValue: Number(saved.accountValue) > 0 ? Number(saved.accountValue) : DEFAULT_ANALYSIS_SETTINGS.accountValue,
         minConfidence: Number(saved.minConfidence) >= 50 ? Number(saved.minConfidence) : DEFAULT_ANALYSIS_SETTINGS.minConfidence,
         maxRiskPercent: Number(saved.maxRiskPercent) > 0 ? Number(saved.maxRiskPercent) : DEFAULT_ANALYSIS_SETTINGS.maxRiskPercent,
+        analysisMode: ['options', 'stock', 'auto'].includes(String(saved.analysisMode || '').toLowerCase())
+          ? String(saved.analysisMode).toLowerCase()
+          : DEFAULT_ANALYSIS_SETTINGS.analysisMode,
       };
     } catch {
       return DEFAULT_ANALYSIS_SETTINGS;
@@ -589,7 +592,7 @@ function App() {
 
       // Fetch the table after analysis so a temporary options-chain failure does
       // not erase a valid quote or the engine's transparent NO_TRADE decision.
-      if (Number(quoteData?.price) > 0) {
+      if (Number(quoteData?.price) > 0 && analysisSettings.analysisMode !== 'stock') {
         try {
           chainData = await options(recommendationData.symbol || clean);
         } catch {
@@ -620,6 +623,16 @@ function App() {
     setSearchTerm(result.symbol);
     setSearchOpen(false);
     run(result.symbol);
+  }
+
+  function changeAnalysisMode(nextMode) {
+    setAnalysisSettings((previous) => ({ ...previous, analysisMode: nextMode }));
+    // Clear mode-dependent results so an options result is never mistaken for
+    // a stock/auto result (or vice versa) after the selector changes.
+    setRec(null);
+    setRecs([]);
+    setChain([]);
+    setError('');
   }
 
   async function analyzeSearchTerm() {
@@ -837,6 +850,42 @@ function App() {
           </div>
           <p className="searchHelp">Search by ticker (such as TSLA or BRK-B) or by company name. Valid symbols are analyzed with the same technical, options, market-context, and risk rules.</p>
 
+          <div className="assetModeSection" aria-label="Recommendation type selector">
+            <div className="assetModeHeader">
+              <div>
+                <span className="controlLabel">Recommendation type</span>
+                <p>Choose whether the engine may recommend options, shares, or either.</p>
+              </div>
+              <strong>{analysisSettings.analysisMode.toUpperCase()}</strong>
+            </div>
+            <div className="assetModeSelector" role="radiogroup" aria-label="Options, Stock, or Auto">
+              {[
+                { value: 'options', label: 'Options', description: 'Options-only. No stock substitute.' },
+                { value: 'stock', label: 'Stock', description: 'Shares-only. No options chain used.' },
+                { value: 'auto', label: 'Auto', description: 'Prefer options; use stock only if options data is unavailable.' },
+              ].map((mode) => (
+                <button
+                  key={mode.value}
+                  type="button"
+                  role="radio"
+                  aria-checked={analysisSettings.analysisMode === mode.value}
+                  className={analysisSettings.analysisMode === mode.value ? 'active' : ''}
+                  onClick={() => changeAnalysisMode(mode.value)}
+                >
+                  <b>{mode.label}</b>
+                  <small>{mode.description}</small>
+                </button>
+              ))}
+            </div>
+            <p className="assetModeNotice">
+              {analysisSettings.analysisMode === 'options'
+                ? 'Options mode is strict: if a verified option chain is unavailable, the result is NO TRADE—not a stock buy or short.'
+                : analysisSettings.analysisMode === 'stock'
+                  ? 'Stock mode analyzes shares only and will not generate Call, Put, Vertical Call, or Vertical Put tickets.'
+                  : 'Auto mode evaluates options first and may produce a defined-risk stock setup only when verified options data is unavailable.'}
+            </p>
+          </div>
+
           <div className="analysisControls" aria-label="Analysis and risk controls">
             <label>
               <span>Account value</span>
@@ -942,6 +991,7 @@ function App() {
 
               <p>{rec.explanation}</p>
               <div className="analysisHealth" aria-label="Analysis data status">
+                <span className="verified">Mode: {(rec.raw_data?.analysis_settings?.asset_mode || analysisSettings.analysisMode).toUpperCase()}</span>
                 <span className={isVerifiedSource(rec.raw_data?.technical?.data_source) ? 'verified' : 'unavailable'}>
                   Technical data: {rec.raw_data?.technical?.data_source || 'unavailable'}
                 </span>
@@ -992,7 +1042,7 @@ function App() {
           </div>
         </Card>
 
-        <Card title="Options Chain">
+        <Card title={analysisSettings.analysisMode === 'stock' ? 'Options Chain (not used in Stock mode)' : 'Options Chain'}>
           <div className="tableScroll">
             <table>
               <thead>
@@ -1010,7 +1060,11 @@ function App() {
               </thead>
               <tbody>
                 {!chain.length && (
-                  <tr><td colSpan="9">No verified option chain is available. The engine may still evaluate a stock setup from verified price data.</td></tr>
+                  <tr><td colSpan="9">{analysisSettings.analysisMode === 'options'
+                    ? 'No verified option chain is available. Options mode remains options-only and returns NO TRADE.'
+                    : analysisSettings.analysisMode === 'stock'
+                      ? 'Stock mode is selected, so the option chain is not requested or used.'
+                      : 'No verified option chain is available. Auto mode may evaluate a stock setup from verified price data.'}</td></tr>
                 )}
                 {chain.map((contract) => (
                   <tr key={contract.symbol}>
@@ -1041,9 +1095,7 @@ function App() {
         </Card>
         <Card title="Implementation Notice" icon={<DollarSign />}>
           <p>
-            A qualified setup may generate an options ticket or a stock ticket. Options require a
-            verified option chain; the platform never invents contracts. It does not connect to or
-            place an order with Charles Schwab.
+            Options mode produces only Call, Put, Vertical Call, or Vertical Put tickets and returns NO TRADE when a verified chain is unavailable. Stock mode produces only share orders. Auto may choose either. The platform never invents contracts or places an order with Charles Schwab.
           </p>
         </Card>
       </section>

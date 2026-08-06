@@ -250,7 +250,7 @@ def _data_quality_no_trade(req: AnalyzeRequest, symbol: str, quote) -> Recommend
 
 
 
-def _equity_fallback_recommendation(
+def _equity_recommendation(
     req: AnalyzeRequest,
     symbol: str,
     quote,
@@ -261,13 +261,10 @@ def _equity_fallback_recommendation(
     all_evidence: list[EvidenceItem],
     hard_failures: list[str],
     raw_data: dict,
+    *,
+    auto_fallback: bool,
 ) -> Recommendation:
-    """Produce a defined-risk stock setup when verified options data is unavailable.
-
-    The platform must not turn an options-provider outage into a $0 quote or an
-    automatic failure for all trading assistance. Equity recommendations still
-    require verified price history, market context, confidence, and position sizing.
-    """
+    """Produce a defined-risk stock setup only when Stock or Auto mode permits it."""
     market_score, market_evidence, market_failures = score_market(market, direction)
     all_evidence.extend(market_evidence)
     hard_failures.extend(market_failures)
@@ -284,15 +281,20 @@ def _equity_fallback_recommendation(
     risk_score = 100 if quantity >= 1 else 0
 
     all_evidence.append(EvidenceItem(
-        category="Options",
-        name="Options data availability",
-        value="unavailable",
-        signal="info",
-        score=0,
+        category="Analysis Mode",
+        name="Stock-analysis authorization",
+        value="Auto fallback" if auto_fallback else "Stock selected",
+        signal="info" if auto_fallback else "pass",
+        score=0 if auto_fallback else 100,
         weight=0,
-        passed=False,
-        explanation="A verified option chain was unavailable, so the engine evaluated a stock setup instead of fabricating an options contract.",
-        data_source="options_unavailable",
+        passed=not auto_fallback,
+        explanation=(
+            "Auto mode permitted a defined-risk stock setup because no verified option chain was available. "
+            "No option contract was invented."
+            if auto_fallback
+            else "Stock mode was explicitly selected. The engine evaluated shares only and did not require or use an option chain."
+        ),
+        data_source="analysis_mode",
     ))
     all_evidence.append(EvidenceItem(
         category="Risk",
@@ -336,7 +338,7 @@ def _equity_fallback_recommendation(
         else [round(entry - stop_distance * 1.5, 2), round(entry - stop_distance * 2.5, 2)]
     )
     raw_data.update({
-        "selected_strategy": "equity_fallback",
+        "selected_strategy": "auto_equity_fallback" if auto_fallback else "stock_only",
         "planned_risk_dollars": planned_risk,
         "blocking_failures": list(dict.fromkeys(hard_failures)),
     })
@@ -383,7 +385,11 @@ def _equity_fallback_recommendation(
         expected_holding_period="2-15 trading days",
         explanation=(
             "A stock setup qualifies from verified technical, market-context, and risk evidence. "
-            "Options data was unavailable, so no options contract was invented."
+            + (
+                "Auto mode selected shares because no verified option chain was available; no option contract was invented."
+                if auto_fallback
+                else "Stock mode was explicitly selected, so the recommendation applies to shares rather than options."
+            )
         ),
         risks=[
             "A stop order can fill below/above the intended price during gaps.",
@@ -401,6 +407,61 @@ def _equity_fallback_recommendation(
         data_quality="verified_market_data",
     )
 
+
+def _options_only_no_trade(
+    req: AnalyzeRequest,
+    symbol: str,
+    quote,
+    tech: dict,
+    market: dict,
+    direction: str,
+    technical_score: int,
+    all_evidence: list[EvidenceItem],
+    hard_failures: list[str],
+    raw_data: dict,
+) -> Recommendation:
+    """Block stock substitution when the user explicitly selected Options mode."""
+    market_score, market_evidence, market_failures = score_market(market, direction)
+    all_evidence.extend(market_evidence)
+    hard_failures.extend(market_failures)
+    blocker = (
+        "Options mode requires a verified option chain, but no verified option contracts were available. "
+        "The engine did not substitute a stock trade."
+    )
+    hard_failures.append(blocker)
+    all_evidence.append(EvidenceItem(
+        category="Analysis Mode",
+        name="Options-only requirement",
+        value={"selected_mode": "options", "verified_contracts": 0},
+        signal="fail",
+        score=-100,
+        weight=1.0,
+        passed=False,
+        explanation=blocker,
+        data_source="options_unavailable",
+    ))
+    breakdown = ScoreBreakdown(
+        technical_score=technical_score,
+        options_score=0,
+        market_score=market_score,
+        risk_score=0,
+        final_confidence=0,
+        threshold=req.min_confidence,
+    )
+    raw_data.update({
+        "selected_strategy": "options_only_unavailable",
+        "blocking_failures": list(dict.fromkeys(hard_failures)),
+    })
+    return _no_trade(
+        symbol,
+        req.min_confidence,
+        "NO TRADE RECOMMENDED. Options mode is options-only, and a verified option chain was unavailable. The engine did not replace it with a stock recommendation.",
+        list(dict.fromkeys(hard_failures)),
+        all_evidence,
+        raw_data,
+        breakdown,
+    )
+
 def analyze_trade(req: AnalyzeRequest) -> Recommendation:
     symbol = normalize_symbol(req.symbol)
     threshold = req.min_confidence
@@ -408,9 +469,11 @@ def analyze_trade(req: AnalyzeRequest) -> Recommendation:
     if not is_verified_quote_source(quote.data_source) or quote.price <= 0:
         return _data_quality_no_trade(req, symbol, quote)
 
+    asset_mode = req.asset_mode.lower()
     tech = technical_snapshot(symbol)
     market = market_context_snapshot()
-    chain = get_option_chain(symbol)
+    # Stock mode never requests an option chain. Options and Auto request it once.
+    chain = get_option_chain(symbol) if asset_mode in {"options", "auto"} else []
     raw_data = {
         "quote": quote.model_dump(),
         "technical": tech,
@@ -421,6 +484,7 @@ def analyze_trade(req: AnalyzeRequest) -> Recommendation:
             "max_risk_percent": req.max_risk_percent,
             "confidence_threshold": threshold,
             "risk_budget_dollars": round(req.account_value * req.max_risk_percent / 100, 2),
+            "asset_mode": asset_mode,
         },
     }
 
@@ -466,8 +530,8 @@ def analyze_trade(req: AnalyzeRequest) -> Recommendation:
         raw_data["blocking_failures"] = reasons
         return _no_trade(symbol, threshold, explanation, reasons, all_evidence, raw_data, breakdown)
 
-    if not chain:
-        return _equity_fallback_recommendation(
+    if asset_mode == "stock":
+        return _equity_recommendation(
             req,
             symbol,
             quote,
@@ -478,6 +542,36 @@ def analyze_trade(req: AnalyzeRequest) -> Recommendation:
             all_evidence,
             hard_failures,
             raw_data,
+            auto_fallback=False,
+        )
+
+    if not chain and asset_mode == "options":
+        return _options_only_no_trade(
+            req,
+            symbol,
+            quote,
+            tech,
+            market,
+            direction,
+            technical_score,
+            all_evidence,
+            hard_failures,
+            raw_data,
+        )
+
+    if not chain:
+        return _equity_recommendation(
+            req,
+            symbol,
+            quote,
+            tech,
+            market,
+            direction,
+            technical_score,
+            all_evidence,
+            hard_failures,
+            raw_data,
+            auto_fallback=True,
         )
 
     single_contract = _best_single_contract(chain, direction, req.account_value, req.max_risk_percent)
@@ -750,6 +844,7 @@ def generate_recommendations(req: RecommendationsRequest):
         recommendation = analyze_trade(AnalyzeRequest(
             symbol=symbol,
             account_value=req.account_value,
+            asset_mode=req.asset_mode,
             strategy="auto",
             min_confidence=req.min_confidence,
             max_risk_percent=req.max_risk_percent,
@@ -760,6 +855,6 @@ def generate_recommendations(req: RecommendationsRequest):
     return {
         "mode": "paper_decision_support",
         "live_trading_enabled": False,
-        "message": "Recommendations use delayed provider data, defined risk controls, and debit-spread fallback when a single option is too expensive. Missing critical evidence produces NO_TRADE.",
+        "message": f"Recommendations ran in {req.asset_mode.upper()} mode. Options mode never substitutes stock; Stock mode evaluates shares only; Auto may use shares only when verified options data is unavailable.",
         "recommendations": results,
     }

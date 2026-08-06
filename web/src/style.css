@@ -183,3 +183,9 @@ summary{padding:10px 0;color:#dbeafe;font-weight:850}summary:hover{color:#67d4ff
   color: var(--muted, #9aa8c4);
   font-weight: 700;
 }
+
+
+.assetModeSection{margin:12px 0 14px;padding:12px;background:#091123;border:1px solid #293a59;border-radius:14px}
+.assetModeHeader{display:flex;align-items:flex-start;justify-content:space-between;gap:14px;margin-bottom:10px}.assetModeHeader p{margin:4px 0 0;font-size:12px;color:#91a2c3}.assetModeHeader>strong{color:#7ddcff;font-size:13px;letter-spacing:.08em;border:1px solid #2b5870;background:#0a2030;border-radius:999px;padding:6px 9px}.controlLabel{font-size:11px;text-transform:uppercase;letter-spacing:.06em;color:#91a2c3!important;font-weight:800}
+.assetModeSelector{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px}.assetModeSelector button{display:grid;gap:4px;text-align:left;min-height:70px;padding:11px;border-radius:12px;border:1px solid #344564;background:#070d1b;color:#dce9ff}.assetModeSelector button:hover{border-color:#4cc7ff;background:#0c1830;transform:translateY(-1px)}.assetModeSelector button:active{transform:translateY(0) scale(.99)}.assetModeSelector button:focus-visible{outline:3px solid rgba(40,184,244,.55);outline-offset:2px}.assetModeSelector button.active{border-color:#38bdf8;background:#0b3650;box-shadow:inset 0 0 0 1px rgba(125,220,255,.35)}.assetModeSelector button b{font-size:15px}.assetModeSelector button small{color:#91a2c3;line-height:1.35}.assetModeSelector button.active small{color:#d8f4ff}.assetModeNotice{margin:10px 0 0;padding:9px 10px;border-left:3px solid #38bdf8;background:#0b172b;border-radius:7px;color:#bcd0ed;font-size:12px;line-height:1.45}
+@media(max-width:640px){.assetModeSelector{grid-template-columns:1fr}.assetModeSelector button{min-height:0}.assetModeHeader{align-items:center}}

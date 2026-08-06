@@ -100,6 +100,7 @@ def test_equity_recommendation_when_options_provider_is_unavailable(monkeypatch)
         AnalyzeRequest(
             symbol="AAPL",
             account_value=10_000,
+            asset_mode="auto",
             max_risk_percent=1,
             min_confidence=75,
             strategy="auto",

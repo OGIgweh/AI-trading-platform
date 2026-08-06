@@ -20,11 +20,11 @@ async function searchStocks(query) {
   return r.json();
 }
 
-async function postAnalyze(symbol) {
+async function postAnalyze(symbol, assetMode) {
   const r = await fetch(`${API}/ai/analyze`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ symbol, account_value: 10000, strategy: 'long_call', min_confidence: 75 }),
+    body: JSON.stringify({ symbol, account_value: 10000, asset_mode: assetMode, strategy: 'auto', min_confidence: 75 }),
   });
   if (!r.ok) throw new Error(await apiError(r));
   return r.json();
@@ -42,6 +42,7 @@ export default function App() {
   const [searchResults, setSearchResults] = useState([]);
   const [searching, setSearching] = useState(false);
   const [rec, setRec] = useState(null);
+  const [assetMode, setAssetMode] = useState('options');
   const [portfolio, setPortfolio] = useState(null);
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
@@ -93,7 +94,7 @@ export default function App() {
       const clean = requestedSymbol.trim().toUpperCase();
       setSymbol(clean);
       setSearchResults([]);
-      setRec(await postAnalyze(clean));
+      setRec(await postAnalyze(clean, assetMode));
     } catch (e) {
       setError(e.message);
     } finally {
@@ -139,6 +140,25 @@ export default function App() {
               style={styles.btn}
             ><Text style={styles.btnText}>Analyze</Text></TouchableOpacity>
           </View>
+          <Text style={[styles.label, { marginTop: 16 }]}>Recommendation type</Text>
+          <View style={styles.modeRow}>
+            {[['options', 'Options'], ['stock', 'Stock'], ['auto', 'Auto']].map(([value, label]) => (
+              <TouchableOpacity
+                key={value}
+                style={[styles.modeButton, assetMode === value && styles.modeButtonActive]}
+                onPress={() => setAssetMode(value)}
+              >
+                <Text style={[styles.modeButtonText, assetMode === value && styles.modeButtonTextActive]}>{label}</Text>
+              </TouchableOpacity>
+            ))}
+          </View>
+          <Text style={styles.modeHelp}>
+            {assetMode === 'options'
+              ? 'Options-only: no stock substitute when an option chain is unavailable.'
+              : assetMode === 'stock'
+                ? 'Shares-only: option contracts are not evaluated.'
+                : 'Auto: options first, with stock fallback only when options data is unavailable.'}
+          </Text>
           {searching ? <ActivityIndicator style={{ marginTop: 10 }} /> : null}
           {searchResults.length > 0 ? (
             <View style={styles.searchResults}>
@@ -185,6 +205,12 @@ const styles = StyleSheet.create({
   searchMeta: { color: '#94a3b8', fontSize: 12, marginTop: 2 },
   btn: { backgroundColor: '#e5e7eb', padding: 12, borderRadius: 12 },
   btnText: { fontWeight: '800' },
+  modeRow: { flexDirection: 'row', gap: 8, marginTop: 8 },
+  modeButton: { flex: 1, paddingVertical: 10, paddingHorizontal: 8, borderRadius: 10, borderColor: '#334155', borderWidth: 1, backgroundColor: '#0b1020', alignItems: 'center' },
+  modeButtonActive: { backgroundColor: '#075985', borderColor: '#38bdf8' },
+  modeButtonText: { color: '#cbd5e1', fontWeight: '800' },
+  modeButtonTextActive: { color: '#ffffff' },
+  modeHelp: { color: '#94a3b8', fontSize: 12, lineHeight: 17, marginTop: 8 },
   noTrade: { borderLeftColor: '#f59e0b', borderLeftWidth: 5, backgroundColor: '#1f2937', borderRadius: 12, padding: 14, marginTop: 14 },
   trade: { borderLeftColor: '#22c55e', borderLeftWidth: 5, backgroundColor: '#13251b', borderRadius: 12, padding: 14, marginTop: 14 },
   result: { color: '#fff', fontWeight: '900', fontSize: 18 },

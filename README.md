@@ -103,3 +103,12 @@ The backend no longer treats Yahoo Finance as a single point of failure. In `aut
 - Provider failures display **Unavailable**, never a fabricated `$0.00` quote.
 - Options tickets use Schwab labels: **Call**, **Put**, **Vertical Call**, and **Vertical Put**.
 - Unsupported Schwab strategies are not fabricated or displayed as available recommendations.
+
+
+## Recommendation Type Selector
+
+The web and mobile clients now expose **Options**, **Stock**, and **Auto** modes:
+
+- **Options:** options-only. Missing verified option-chain data returns `NO_TRADE`; stock is never substituted.
+- **Stock:** shares-only. The backend does not request or use an option chain.
+- **Auto:** evaluates options first and may use a defined-risk stock setup only when verified options data is unavailable.
