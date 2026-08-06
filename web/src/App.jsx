@@ -37,8 +37,10 @@ const ANALYSIS_SETTINGS_STORAGE_KEY = 'ai-trading-platform-analysis-settings';
 const DEFAULT_ANALYSIS_SETTINGS = { accountValue: 10000, minConfidence: 75, maxRiskPercent: 1 };
 
 const CHART_PERIODS = ['1mo', '3mo', '6mo', '1y', '5y'];
-const VERIFIED_DATA_SOURCES = new Set(['tradier_realtime', 'tradier_delayed', 'yfinance_delayed', 'stooq_eod', 'mixed_verified_providers']);
+const VERIFIED_DATA_SOURCES = new Set(['tradier_realtime', 'tradier_delayed', 'yahoo_chart_delayed', 'yfinance_delayed', 'stooq_eod', 'mixed_verified_providers']);
 const isVerifiedSource = (source) => VERIFIED_DATA_SOURCES.has(String(source || '').toLowerCase());
+const hasVerifiedQuote = (quote) => isVerifiedSource(quote?.data_source) && Number(quote?.price) > 0;
+const quoteMoney = (value, quote) => hasVerifiedQuote(quote) && Number(value) > 0 ? money(value) : 'Unavailable';
 
 const money = (value) => {
   const parsed = Number(value);
@@ -187,7 +189,7 @@ function fallbackOrder(rec, currentQuote) {
   const quantity = rec.position_size || 1;
   const mid = Number(rec.entry_price);
   return {
-    strategy: rec.recommendation === 'CALL' ? 'Long Call' : 'Long Put',
+    strategy: rec.recommendation === 'CALL' ? 'Call' : 'Put',
     underlying_symbol: rec.symbol,
     underlying_price: currentQuote?.price || rec.raw_data?.quote?.price,
     action: 'BUY_TO_OPEN',
@@ -366,7 +368,7 @@ function SuggestedOrderTicket({ rec, currentQuote }) {
         <div>
           <span className="eyebrow">BROKER ENTRY FORMAT</span>
           <h3>Suggested Options Order</h3>
-          <p>{order.leg_count > 1 ? 'Defined-risk multi-leg order' : 'Single-leg directional order'} arranged in broker-entry sequence.</p>
+          <p>Use Schwab’s strategy name shown below, then enter each leg in the displayed sequence.</p>
         </div>
         <span className="paperOnlyBadge">Review required</span>
       </div>
@@ -374,7 +376,7 @@ function SuggestedOrderTicket({ rec, currentQuote }) {
       <div className="underlyingStrip">
         <div><span>Underlying</span><strong>{order.underlying_symbol}</strong></div>
         <div><span>Market price</span><strong>{money(order.underlying_price)}</strong></div>
-        <div><span>Strategy</span><strong>{order.strategy}</strong></div>
+        <div><span>Schwab strategy</span><strong>{order.strategy}</strong></div>
         <div><span>Holding period</span><strong>{rec.expected_holding_period}</strong></div>
       </div>
 
@@ -700,12 +702,14 @@ function App() {
         <Card title={`${chartData?.symbol || symbol} Price Chart`} className="priceChartCard">
           <div className="chartHeader">
             <div>
-              <strong>{money(chartData?.summary?.last_price || currentQuote?.price)}</strong>
-              <span className={(chartData?.summary?.period_change || 0) >= 0 ? 'positive' : 'negative'}>
-                {(chartData?.summary?.period_change || 0) >= 0 ? '+' : ''}
-                {money(chartData?.summary?.period_change || 0)}
-                {' '}({chartData?.summary?.period_change_percent ?? 0}%)
-              </span>
+              <strong>{Number(chartData?.summary?.last_price) > 0 ? money(chartData.summary.last_price) : quoteMoney(currentQuote?.price, currentQuote)}</strong>
+              {Number(chartData?.summary?.last_price) > 0 ? (
+                <span className={(chartData?.summary?.period_change || 0) >= 0 ? 'positive' : 'negative'}>
+                  {(chartData?.summary?.period_change || 0) >= 0 ? '+' : ''}
+                  {money(chartData?.summary?.period_change || 0)}
+                  {' '}({chartData?.summary?.period_change_percent ?? 0}%)
+                </span>
+              ) : <span className="dataUnavailableText">Verified price unavailable</span>}
             </div>
             <span className={`marketState ${(currentQuote?.market_status || portfolio?.market_status || 'CLOSED').toLowerCase()}`}>
               {currentQuote?.market_status || portfolio?.market_status || 'CLOSED'}
@@ -891,18 +895,20 @@ function App() {
               <div className="quotePrimary">
                 <div>
                   <strong>{currentQuote.symbol}</strong>
-                  <span className="lastPrice">{money(currentQuote.price)}</span>
+                  <span className="lastPrice">{quoteMoney(currentQuote.price, currentQuote)}</span>
                 </div>
-                <span className={currentQuote.change >= 0 ? 'positive' : 'negative'}>
-                  {currentQuote.change >= 0 ? '+' : ''}{money(currentQuote.change)} ({currentQuote.change_percent}%)
-                </span>
+                {hasVerifiedQuote(currentQuote) ? (
+                  <span className={currentQuote.change >= 0 ? 'positive' : 'negative'}>
+                    {currentQuote.change >= 0 ? '+' : ''}{money(currentQuote.change)} ({currentQuote.change_percent}%)
+                  </span>
+                ) : <span className="dataUnavailableText">Provider temporarily unavailable</span>}
               </div>
               <div className="quoteFacts">
                 <span><small>Status</small><b>{currentQuote.market_status}</b></span>
                 <span><small>As of</small><b>{formatAsOf(currentQuote.as_of || chartData?.as_of)}</b></span>
-                <span><small>Previous close</small><b>{money(currentQuote.previous_close)}</b></span>
-                <span><small>Day range</small><b>{money(currentQuote.day_low)} – {money(currentQuote.day_high)}</b></span>
-                <span><small>Volume</small><b>{currentQuote.volume?.toLocaleString()}</b></span>
+                <span><small>Previous close</small><b>{hasVerifiedQuote(currentQuote) ? money(currentQuote.previous_close) : 'Unavailable'}</b></span>
+                <span><small>Day range</small><b>{hasVerifiedQuote(currentQuote) ? `${money(currentQuote.day_low)} – ${money(currentQuote.day_high)}` : 'Unavailable'}</b></span>
+                <span><small>Volume</small><b>{hasVerifiedQuote(currentQuote) ? currentQuote.volume?.toLocaleString() : 'Unavailable'}</b></span>
                 <span><small>Data source</small><b>{currentQuote.data_source}</b></span>
               </div>
               {currentQuote.data_source === 'stooq_eod' ? (

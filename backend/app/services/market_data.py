@@ -12,6 +12,7 @@ from app.services.market_clock import market_status
 from app.services.risk import bid_ask_spread_pct
 from app.services.provider_adapters import (
     fetch_stooq_history,
+    fetch_yahoo_chart_history,
     fetch_tradier_history,
     fetch_tradier_options,
     fetch_tradier_quote,
@@ -126,6 +127,7 @@ def is_verified_quote_source(source: str) -> bool:
         "tradier_realtime",
         "tradier_delayed",
         "yfinance_delayed",
+        "yahoo_chart_delayed",
         "stooq_eod",
     }
 
@@ -471,9 +473,27 @@ def _lookup_quote_cached(requested_symbol: str, cache_bucket: int) -> QuoteLooku
             except Exception as exc:
                 provider_errors.append(f"Tradier: {exc}")
 
-    # In auto mode, use the independent completed-daily fallback before Yahoo.
-    # Render data-center IPs can be temporarily rate-limited by Yahoo; trying
-    # Stooq first prevents every valid ticker from becoming a $0 quote.
+    # Prefer Yahoo's public v8 chart endpoint before yfinance. It does not use
+    # yfinance's cookie/crumb flow and frequently remains available when the
+    # library paths are rate-limited on cloud hosting providers.
+    if mode in {"auto", "yfinance"}:
+        for candidate in symbol_candidates(normalized):
+            try:
+                frame = fetch_yahoo_chart_history(candidate, "5d", "1d")
+                quote = quote_from_history(candidate, frame, "yahoo_chart_delayed") if frame is not None else None
+                if quote:
+                    return QuoteLookup(
+                        quote,
+                        "ok",
+                        str(requested_symbol),
+                        candidate,
+                        "Verified quote retrieved from Yahoo's public chart endpoint.",
+                    )
+            except Exception as exc:
+                provider_errors.append(f"Yahoo chart: {exc}")
+
+    # Use the independent completed-daily fallback before yfinance's library
+    # paths. This preserves a last completed close if Yahoo chart is unavailable.
     if mode in {"auto", "stooq"} or settings.stooq_fallback_enabled:
         try:
             frame = fetch_stooq_history(normalized, "1y")
@@ -708,9 +728,19 @@ def _fetch_price_history_uncached(normalized: str, provider_period: str, interva
         except Exception:
             pass
 
-    # Prefer the independent daily provider in auto mode. It gives the chart
-    # and indicator engine a reliable completed-price series even if Yahoo has
-    # rate-limited the Render service IP.
+    # Use Yahoo's direct public chart endpoint before yfinance. This avoids the
+    # cookie/crumb and quote-summary calls that are commonly rate-limited on
+    # Render while still returning verified OHLCV history.
+    if mode in {"auto", "yfinance"}:
+        try:
+            frame = fetch_yahoo_chart_history(normalized, provider_period, interval)
+            if frame is not None and not frame.empty:
+                return frame, normalized, "ok"
+        except Exception:
+            pass
+
+    # Use the independent completed-daily provider next. It gives the chart and
+    # indicator engine a last completed series if Yahoo is unavailable.
     if (mode in {"auto", "stooq"} or settings.stooq_fallback_enabled) and interval == "1d":
         try:
             frame = fetch_stooq_history(normalized, provider_period)
@@ -1005,10 +1035,12 @@ def provider_status_detail() -> dict[str, Any]:
     priority = []
     if mode in {"auto", "tradier"} and tradier_enabled():
         priority.append("tradier")
+    if mode in {"auto", "yfinance"}:
+        priority.append("yahoo_chart_delayed")
     if mode in {"auto", "stooq"} or settings.stooq_fallback_enabled:
         priority.append("stooq_eod")
     if mode in {"auto", "yfinance"}:
-        priority.append("yfinance")
+        priority.append("yfinance_library")
     return {
         "configured_mode": mode,
         "tradier_configured": tradier_enabled(),
@@ -1017,6 +1049,6 @@ def provider_status_detail() -> dict[str, Any]:
         "provider_priority": priority,
         "note": (
             "Tradier is recommended for reliable quotes and options. "
-            "Without a Tradier token, the platform uses Stooq completed daily prices and Yahoo best-effort options data."
+            "Without a Tradier token, the platform uses Yahoo's public chart endpoint, then Stooq completed daily prices, with yfinance as a final fallback."
         ),
     }

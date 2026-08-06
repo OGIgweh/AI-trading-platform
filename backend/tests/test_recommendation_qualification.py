@@ -81,7 +81,7 @@ def test_expensive_single_uses_defined_risk_spread(monkeypatch):
     assert result.recommendation == "CALL"
     assert result.suggested_order is not None
     assert result.suggested_order.leg_count == 2
-    assert result.suggested_order.strategy == "Bull Call Debit Spread"
+    assert result.suggested_order.strategy == "Vertical Call"
     assert result.suggested_order.estimated_max_loss <= 100
     assert result.confidence >= 75
 

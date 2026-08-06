@@ -145,3 +145,23 @@ def test_stooq_csv_is_parsed_as_verified_daily_history(monkeypatch):
     assert len(frame) == 2
     assert float(frame.iloc[-1]["Close"]) == 160
     assert frame.attrs["data_source"] == "stooq_eod"
+
+
+def test_quote_uses_direct_yahoo_chart_before_library_and_zero(monkeypatch):
+    market_data._lookup_quote_cached.cache_clear()
+    monkeypatch.setattr(market_data, "tradier_enabled", lambda: False)
+    direct = _history("yahoo_chart_delayed")
+    monkeypatch.setattr(market_data, "fetch_yahoo_chart_history", lambda symbol, period, interval="1d": direct)
+    monkeypatch.setattr(market_data, "fetch_stooq_history", lambda symbol, period: None)
+    monkeypatch.setattr(
+        market_data,
+        "_lookup_yfinance_quote_cached",
+        lambda symbol, bucket: market_data.QuoteLookup(
+            Quote(symbol=symbol, price=0, change=0, change_percent=0, volume=0, market_status="OPEN", data_source="provider_unavailable"),
+            "provider_unavailable", symbol, symbol, "library unavailable"
+        ),
+    )
+    result = market_data.get_quote_lookup("AAPL")
+    assert result.status == "ok"
+    assert result.quote.price > 0
+    assert result.quote.data_source == "yahoo_chart_delayed"

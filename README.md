@@ -96,3 +96,10 @@ The recommendation engine now supports user-configurable account/risk settings a
 ## Market-data reliability update
 
 The backend no longer treats Yahoo Finance as a single point of failure. In `auto` mode it prefers Tradier when configured, uses Stooq completed daily data as an independent keyless fallback, and keeps Yahoo as a best-effort secondary source. The UI clearly identifies end-of-day fallback data. If options are unavailable but verified stock data qualifies, the engine may produce a defined-risk stock ticket instead of inventing an options contract. See `docs/MARKET_DATA_PROVIDER_FALLBACK_FIX.md`.
+
+## Quote Provider and Schwab Naming Update
+
+- Uses Tradier when configured, then Yahoo public chart data, Stooq completed daily data, and yfinance as a final fallback.
+- Provider failures display **Unavailable**, never a fabricated `$0.00` quote.
+- Options tickets use Schwab labels: **Call**, **Put**, **Vertical Call**, and **Vertical Put**.
+- Unsupported Schwab strategies are not fabricated or displayed as available recommendations.

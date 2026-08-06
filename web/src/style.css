@@ -177,3 +177,9 @@ summary{padding:10px 0;color:#dbeafe;font-weight:850}summary:hover{color:#67d4ff
   .analysisControls{grid-template-columns:1fr}
   .riskBudgetSummary{grid-column:auto;grid-template-columns:1fr;gap:4px}
 }
+
+
+.dataUnavailableText {
+  color: var(--muted, #9aa8c4);
+  font-weight: 700;
+}

@@ -508,7 +508,7 @@ def analyze_trade(req: AnalyzeRequest) -> Recommendation:
         entry_price = single_mid
         planned_risk = round(quantity * planned_loss_per_contract(single_mid, PLANNED_STOP_FRACTION), 2)
         absolute_max_loss = round(quantity * single_mid * 100, 2)
-        strategy_name = "Long Call" if direction == "CALL" else "Long Put"
+        strategy_name = "Call" if direction == "CALL" else "Put"
         selected_contract_raw = contract.model_dump() if contract else None
     else:
         long_contract = spread["long"]
@@ -524,7 +524,7 @@ def analyze_trade(req: AnalyzeRequest) -> Recommendation:
         entry_price = float(spread["net_debit"])
         planned_risk = round(quantity * entry_price * 100, 2)
         absolute_max_loss = planned_risk
-        strategy_name = "Bull Call Debit Spread" if direction == "CALL" else "Bear Put Debit Spread"
+        strategy_name = "Vertical Call" if direction == "CALL" else "Vertical Put"
         selected_contract_raw = {
             "strategy": strategy_name,
             "long": long_contract.model_dump(),
@@ -590,6 +590,16 @@ def analyze_trade(req: AnalyzeRequest) -> Recommendation:
 
     raw_data.update({
         "selected_strategy": selected_strategy,
+        "schwab_strategy_name": strategy_name,
+        "strategy_structure": (
+            "Buy lower-strike call and sell higher-strike call with the same expiration"
+            if strategy_name == "Vertical Call"
+            else "Buy higher-strike put and sell lower-strike put with the same expiration"
+            if strategy_name == "Vertical Put"
+            else "Single-leg long call"
+            if strategy_name == "Call"
+            else "Single-leg long put"
+        ),
         "selected_contract": selected_contract_raw,
         "planned_risk_dollars": planned_risk,
         "absolute_max_loss_dollars": absolute_max_loss,

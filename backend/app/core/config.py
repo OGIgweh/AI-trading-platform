@@ -9,7 +9,7 @@ class Settings(BaseSettings):
     # Market data configuration
     # "yfinance" = free delayed market data best-effort provider.
     # "sample" = deterministic demo data.
-    # "auto" = use yfinance with retries; never substitute sample values for live analysis.
+    # "auto" = Tradier (if configured), direct Yahoo chart, Stooq, then yfinance; never substitute sample values for live analysis.
     market_data_provider: str = "auto"
     market_data_cache_seconds: int = 60
     market_data_retries: int = 2

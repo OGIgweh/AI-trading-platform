@@ -3,6 +3,7 @@ from __future__ import annotations
 from datetime import date, datetime, timedelta, timezone
 from io import StringIO
 from typing import Any
+from urllib.parse import quote as url_quote
 
 import httpx
 import pandas as pd
@@ -258,6 +259,116 @@ def fetch_tradier_options(symbol: str) -> list[OptionContract]:
     return rows
 
 
+
+def _yahoo_chart_symbol(symbol: str) -> str:
+    """Return the Yahoo-compatible symbol used by the public chart endpoint."""
+    return str(symbol or "").upper().strip().replace("/", "-")
+
+
+def _yahoo_range(period: str) -> str:
+    supported = {"1d", "5d", "1mo", "3mo", "6mo", "1y", "2y", "5y", "10y", "ytd", "max"}
+    clean = str(period or "1y").lower().strip()
+    return clean if clean in supported else "1y"
+
+
+def _yahoo_chart_payload_to_frame(payload: dict[str, Any], source: str = "yahoo_chart_delayed") -> pd.DataFrame | None:
+    """Convert Yahoo's keyless chart JSON response into a normalized OHLCV frame."""
+    try:
+        chart = payload.get("chart") or {}
+        if chart.get("error"):
+            return None
+        results = chart.get("result") or []
+        if not results:
+            return None
+        result = results[0] or {}
+        timestamps = result.get("timestamp") or []
+        indicators = result.get("indicators") or {}
+        quote_rows = indicators.get("quote") or []
+        if not timestamps or not quote_rows:
+            return None
+        quote_data = quote_rows[0] or {}
+        adjclose_rows = indicators.get("adjclose") or []
+        adjusted = (adjclose_rows[0] or {}).get("adjclose") if adjclose_rows else None
+
+        rows: list[dict[str, Any]] = []
+        for index, stamp in enumerate(timestamps):
+            close_values = quote_data.get("close") or []
+            close = close_values[index] if index < len(close_values) else None
+            if close is None:
+                continue
+            def value(name: str, default: Any = None):
+                values = quote_data.get(name) or []
+                return values[index] if index < len(values) and values[index] is not None else default
+            rows.append({
+                "Date": datetime.fromtimestamp(float(stamp), tz=timezone.utc),
+                "Open": value("open", close),
+                "High": value("high", close),
+                "Low": value("low", close),
+                "Close": close,
+                "Adj Close": adjusted[index] if adjusted and index < len(adjusted) and adjusted[index] is not None else close,
+                "Volume": value("volume", 0),
+            })
+        if not rows:
+            return None
+        frame = pd.DataFrame(rows).set_index("Date").sort_index()
+        for column in ["Open", "High", "Low", "Close", "Adj Close", "Volume"]:
+            if column in frame:
+                frame[column] = pd.to_numeric(frame[column], errors="coerce")
+        frame = frame.dropna(subset=["Close"])
+        if frame.empty:
+            return None
+        frame.attrs["data_source"] = source
+        meta = result.get("meta") or {}
+        frame.attrs["currency"] = meta.get("currency")
+        frame.attrs["exchange_timezone"] = meta.get("exchangeTimezoneName")
+        return frame
+    except Exception:
+        return None
+
+
+def fetch_yahoo_chart_history(symbol: str, period: str, interval: str = "1d") -> pd.DataFrame | None:
+    """Fetch public Yahoo chart data without yfinance cookies/crumbs.
+
+    Render data-center IPs are sometimes rate-limited by yfinance's cookie and
+    quote-summary paths. The v8 chart endpoint is a separate, keyless endpoint
+    and is tried through both Yahoo hosts with conservative browser headers.
+    """
+    provider_symbol = _yahoo_chart_symbol(symbol)
+    if not provider_symbol:
+        return None
+    params = {
+        "range": _yahoo_range(period),
+        "interval": interval,
+        "includePrePost": "false",
+        "events": "div,splits,capitalGains",
+        "includeAdjustedClose": "true",
+    }
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 Safari/537.36",
+        "Accept": "application/json,text/plain,*/*",
+        "Accept-Language": "en-US,en;q=0.9",
+        "Cache-Control": "no-cache",
+    }
+    timeout = max(5.0, float(settings.market_data_timeout_seconds))
+    endpoints = (
+        "https://query1.finance.yahoo.com/v8/finance/chart",
+        "https://query2.finance.yahoo.com/v8/finance/chart",
+    )
+    for endpoint in endpoints:
+        for _ in range(max(1, int(settings.market_data_retries) + 1)):
+            try:
+                with httpx.Client(timeout=timeout, follow_redirects=True, headers=headers) as client:
+                    response = client.get(f"{endpoint}/{url_quote(provider_symbol, safe='')}", params=params)
+                    if response.status_code in {401, 403, 429, 500, 502, 503, 504}:
+                        continue
+                    response.raise_for_status()
+                    frame = _yahoo_chart_payload_to_frame(response.json())
+                    if frame is not None and not frame.empty:
+                        return frame
+            except Exception:
+                continue
+    return None
+
 def _stooq_symbol(symbol: str) -> str | None:
     clean = symbol.upper().strip()
     if not clean or clean.startswith("^") or "=" in clean:
@@ -294,35 +405,46 @@ def fetch_stooq_history(symbol: str, period: str) -> pd.DataFrame | None:
     provider_symbol = _stooq_symbol(symbol)
     if not provider_symbol:
         return None
-    params = {
+    base_params = {
         "s": provider_symbol,
         "i": "d",
         "d1": _period_start(period).strftime("%Y%m%d"),
         "d2": date.today().strftime("%Y%m%d"),
     }
     timeout = max(5.0, float(settings.market_data_timeout_seconds))
-    with httpx.Client(timeout=timeout, follow_redirects=True) as client:
-        response = client.get(
-            "https://stooq.com/q/d/l/",
-            params=params,
-            headers={"User-Agent": "Mozilla/5.0 AI-Trading-Platform/1.0"},
-        )
-        response.raise_for_status()
-    text = response.text.strip()
-    if not text.startswith("Date,"):
-        return None
-    frame = pd.read_csv(StringIO(text))
-    if frame.empty or "Date" not in frame or "Close" not in frame:
-        return None
-    frame["Date"] = pd.to_datetime(frame["Date"], errors="coerce")
-    frame = frame.dropna(subset=["Date", "Close"]).set_index("Date").sort_index()
-    for column in ["Open", "High", "Low", "Close", "Volume"]:
-        if column in frame:
-            frame[column] = pd.to_numeric(frame[column], errors="coerce")
-    if frame.empty:
-        return None
-    frame.attrs["data_source"] = "stooq_eod"
-    return frame
+    endpoints = ("https://stooq.com/q/d/l/", "https://stooq.pl/q/d/l/")
+    parameter_sets = (base_params, {"s": provider_symbol, "i": "d"})
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36",
+        "Accept": "text/csv,text/plain,*/*",
+        "Accept-Language": "en-US,en;q=0.9",
+    }
+    for endpoint in endpoints:
+        for params in parameter_sets:
+            try:
+                with httpx.Client(timeout=timeout, follow_redirects=True, headers=headers) as client:
+                    response = client.get(endpoint, params=params)
+                    response.raise_for_status()
+                text = response.text.strip().lstrip("\ufeff")
+                if not text.lower().startswith("date,"):
+                    continue
+                frame = pd.read_csv(StringIO(text))
+                if frame.empty or "Date" not in frame or "Close" not in frame:
+                    continue
+                frame["Date"] = pd.to_datetime(frame["Date"], errors="coerce")
+                frame = frame.dropna(subset=["Date", "Close"]).set_index("Date").sort_index()
+                for column in ["Open", "High", "Low", "Close", "Volume"]:
+                    if column in frame:
+                        frame[column] = pd.to_numeric(frame[column], errors="coerce")
+                if frame.empty:
+                    continue
+                start_date = pd.Timestamp(_period_start(period))
+                frame = frame.loc[frame.index >= start_date] if not frame.empty else frame
+                frame.attrs["data_source"] = "stooq_eod"
+                return frame
+            except Exception:
+                continue
+    return None
 
 
 def quote_from_history(symbol: str, frame: pd.DataFrame, source: str) -> Quote | None:
