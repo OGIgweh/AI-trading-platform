@@ -430,6 +430,28 @@ function SuggestedOrderTicket({ rec, currentQuote }) {
         {order.break_even != null && <TicketRow label="Break-even at expiration" value={money(order.break_even)} />}
       </div>
 
+      <div className="probabilityPanel">
+        <div className="probabilityPanelHeader">
+          <div>
+            <span className="eyebrow">EXPIRATION & PROBABILITY CHECK</span>
+            <b>Move required vs. time remaining</b>
+          </div>
+          <small>Evidence estimates · not a probability of profit</small>
+        </div>
+        <div className="probabilityGrid">
+          <div><span>Out of the money</span><strong>{order.moneyness_percent != null ? `${order.moneyness_percent}%` : '—'}</strong></div>
+          <div><span>Move to break-even</span><strong>{order.required_move_percent != null ? `${order.required_move_percent}%` : '—'}</strong></div>
+          <div><span>IV expected move</span><strong>{order.expected_move_percent != null ? `${order.expected_move_percent}% (${money(order.expected_move_dollars)})` : '—'}</strong></div>
+          <div><span>Break-even / expected move</span><strong>{order.break_even_expected_move_multiple != null ? `${order.break_even_expected_move_multiple}×` : '—'}</strong></div>
+          <div><span>Directional delta</span><strong>{order.directional_delta != null ? order.directional_delta : '—'}</strong><small>Not probability of profit</small></div>
+          <div><span>Time-decay risk</span><strong>{order.time_decay_risk || '—'}</strong><small>{order.theta_per_day != null ? `Theta ${order.theta_per_day}/day` : 'Exact theta unavailable'}</small></div>
+        </div>
+        <p className="probabilityNote">
+          {order.delta_interpretation || 'Delta measures directional sensitivity; it is not a guaranteed probability.'} {' '}
+          {order.theta_interpretation || ''}
+        </p>
+      </div>
+
       <div className="exitPlan">
         <div><span>Suggested stop</span><strong>{money(rec.stop_loss)}</strong></div>
         <div><span>Profit target 1</span><strong>{money(rec.profit_targets?.[0])}</strong></div>
@@ -717,6 +739,7 @@ function App() {
         <Card title="AI Confidence" icon={<Brain />}>
           <b>{rec ? `${rec.confidence}%` : '—'}</b>
           <span>{rec ? `${rec.symbol} · ${rec.recommendation === 'NO_TRADE' ? 'No trade' : rec.recommendation}` : 'Run an analysis'}</span>
+          <small className="confidenceClarifier">Evidence alignment · not probability of profit</small>
         </Card>
         <Card title="Risk Mode" icon={<AlertTriangle />}>
           <b>Capital First</b>
@@ -1036,7 +1059,8 @@ function App() {
                 </div>
                 <div className="confidenceBadge">
                   <strong>{rec.confidence}%</strong>
-                  <small>Threshold {rec.threshold}%</small>
+                  <small>Evidence alignment</small>
+                  <small>Threshold {rec.threshold}% · not win probability</small>
                 </div>
               </div>
 

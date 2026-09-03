@@ -116,3 +116,6 @@ The web and mobile clients now expose **Options**, **Stock**, and **Auto** modes
 
 ## Option Trade Structure
 Options and Auto modes include a strict **Single Leg / Multi Leg / Best Fit** selector. Single Leg permits Call/Put only; Multi Leg currently permits verified Vertical Call/Vertical Put debit spreads only; Best Fit can choose either.
+
+## Probability-sensitive option qualification
+The options engine now checks moneyness, DTE, IV-implied expected move, break-even distance, directional delta, and time-decay exposure before producing a broker ticket. The displayed AI confidence is evidence alignment, not probability of profit. See `docs/PROBABILITY_SENSITIVE_OPTION_QUALIFICATION.md`.

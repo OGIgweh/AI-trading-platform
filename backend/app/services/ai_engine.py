@@ -171,6 +171,119 @@ def _best_debit_spread(
     return max(candidates, key=lambda item: item["rank"]) if candidates else None
 
 
+def _option_expiration_metrics(quote, contract, entry_price: float, direction: str) -> dict:
+    """Return probability-sensitive expiration metrics without pretending delta is a win probability."""
+    price = float(quote.price or 0)
+    strike = float(contract.strike or 0)
+    dte = max(1, int(contract.days_to_expiration or 0))
+    iv = max(0.0, float(contract.implied_volatility or 0))
+    delta = float(contract.delta or 0)
+
+    if direction == "CALL":
+        moneyness_pct = max(0.0, (strike - price) / price * 100) if price else 0.0
+        break_even = strike + entry_price
+        required_move_pct = max(0.0, (break_even - price) / price * 100) if price else 0.0
+    else:
+        moneyness_pct = max(0.0, (price - strike) / price * 100) if price else 0.0
+        break_even = strike - entry_price
+        required_move_pct = max(0.0, (price - break_even) / price * 100) if price else 0.0
+
+    expected_move_dollars = price * iv * ((dte / 365.0) ** 0.5) if price and iv else 0.0
+    expected_move_pct = (expected_move_dollars / price * 100) if price and expected_move_dollars else 0.0
+    expected_move_multiple = (required_move_pct / expected_move_pct) if expected_move_pct > 0 else None
+
+    theta = float(contract.theta or 0)
+    if theta != 0:
+        theta_per_day = round(theta, 4)
+        theta_interpretation = "Provider-reported theta; option value can change by approximately this amount per share per day from time decay, all else equal."
+    else:
+        theta_per_day = None
+        theta_interpretation = "Exact theta is unavailable from this provider; time-decay risk is classified from days to expiration instead of inventing a Greek."
+
+    if dte <= 10:
+        decay_risk = "VERY HIGH"
+    elif dte <= 21:
+        decay_risk = "HIGH"
+    elif dte <= 45:
+        decay_risk = "MODERATE"
+    else:
+        decay_risk = "LOWER"
+
+    return {
+        "break_even": round(break_even, 2),
+        "moneyness_percent": round(moneyness_pct, 2),
+        "required_move_percent": round(required_move_pct, 2),
+        "expected_move_dollars": round(expected_move_dollars, 2),
+        "expected_move_percent": round(expected_move_pct, 2),
+        "break_even_expected_move_multiple": round(expected_move_multiple, 2) if expected_move_multiple is not None else None,
+        "directional_delta": round(delta, 2),
+        "delta_interpretation": "Directional delta exposure only; it is not the model's probability of profit and may be a provider proxy.",
+        "theta_per_day": theta_per_day,
+        "theta_interpretation": theta_interpretation,
+        "time_decay_risk": decay_risk,
+        "dte": dte,
+    }
+
+
+def _score_expiration_quality(quote, contract, entry_price: float, direction: str) -> tuple[int, list[EvidenceItem], list[str], list[str], dict]:
+    metrics = _option_expiration_metrics(quote, contract, entry_price, direction)
+    evidence: list[EvidenceItem] = []
+    failures: list[str] = []
+    warnings: list[str] = []
+    ds = getattr(contract, "data_source", "options")
+    dte = metrics["dte"]
+    otm = metrics["moneyness_percent"]
+    required = metrics["required_move_percent"]
+    multiple = metrics["break_even_expected_move_multiple"]
+    abs_delta = abs(metrics["directional_delta"] or 0)
+
+    quality = 100
+    if dte <= 21 and otm > 4.0:
+        failures.append(f"The selected option is {otm:.1f}% out of the money with only {dte} DTE; short-dated far-OTM contracts are blocked.")
+        quality -= 45
+    elif otm > 3.0:
+        warnings.append(f"The selected option starts {otm:.1f}% out of the money.")
+        quality -= 15
+
+    if multiple is not None and multiple > 1.35:
+        failures.append(f"Break-even requires about {multiple:.2f}× the IV-implied expected move by expiration, which exceeds the configured probability-sensitive limit.")
+        quality -= 45
+    elif multiple is not None and multiple > 1.0:
+        warnings.append(f"Break-even requires about {multiple:.2f}× the IV-implied expected move by expiration.")
+        quality -= 15
+
+    if dte <= 21 and abs_delta < 0.30:
+        failures.append(f"Directional delta {abs_delta:.2f} is too low for a {dte}-DTE single-leg directional trade.")
+        quality -= 35
+    elif abs_delta < 0.35:
+        warnings.append(f"Directional delta {abs_delta:.2f} provides relatively weak price sensitivity.")
+        quality -= 10
+
+    evidence.append(EvidenceItem(
+        category="Expiration / Probability", name="Required move to break-even",
+        value={"required_move_percent": required, "expected_move_percent": metrics["expected_move_percent"], "expected_move_multiple": multiple},
+        signal="fail" if any("expected move" in x for x in failures) else "warning" if multiple and multiple > 1 else "pass",
+        score=max(-100, min(100, quality)), weight=0.18, passed=not any("expected move" in x for x in failures),
+        explanation="Compares the expiration break-even move with an IV-based one-standard-deviation expected-move estimate. This is an estimate, not a guaranteed range.", data_source=ds))
+    evidence.append(EvidenceItem(
+        category="Expiration / Probability", name="Moneyness and DTE",
+        value={"out_of_money_percent": otm, "days_to_expiration": dte},
+        signal="fail" if dte <= 21 and otm > 4 else "warning" if otm > 3 else "pass",
+        score=20 if otm <= 3 else -25, weight=0.12, passed=not (dte <= 21 and otm > 4),
+        explanation="Short-dated contracts that require a large underlying move are penalized or blocked before a high-confidence recommendation can qualify.", data_source=ds))
+    evidence.append(EvidenceItem(
+        category="Expiration / Probability", name="Directional delta", value=metrics["directional_delta"],
+        signal="fail" if dte <= 21 and abs_delta < .30 else "warning" if abs_delta < .35 else "pass",
+        score=int(abs_delta * 100), weight=0.10, passed=not (dte <= 21 and abs_delta < .30),
+        explanation=metrics["delta_interpretation"], data_source=ds))
+    evidence.append(EvidenceItem(
+        category="Expiration / Probability", name="Time-decay exposure",
+        value={"theta_per_day": metrics["theta_per_day"], "time_decay_risk": metrics["time_decay_risk"], "dte": dte},
+        signal="warning" if dte <= 21 else "info", score=0, weight=0.08, passed=dte > 10,
+        explanation=metrics["theta_interpretation"], data_source=ds))
+    return max(0, min(100, quality)), evidence, failures, warnings, metrics
+
+
 def _prefix_evidence(items: Iterable[EvidenceItem], prefix: str) -> list[EvidenceItem]:
     return [item.model_copy(update={"name": f"{prefix} — {item.name}"}) for item in items]
 
@@ -716,6 +829,13 @@ def analyze_trade(req: AnalyzeRequest) -> Recommendation:
     hard_failures.extend(options_failures)
     warnings.extend(options_warnings)
 
+    expiration_score, expiration_evidence, expiration_failures, expiration_warnings, expiration_metrics = _score_expiration_quality(
+        quote, contract, entry_price, direction
+    )
+    all_evidence.extend(expiration_evidence)
+    hard_failures.extend(expiration_failures)
+    warnings.extend(expiration_warnings)
+
     market_score, market_evidence, market_failures = score_market(market, direction)
     all_evidence.extend(market_evidence)
     hard_failures.extend(market_failures)
@@ -737,11 +857,16 @@ def analyze_trade(req: AnalyzeRequest) -> Recommendation:
     # is still a hard gate, but no longer suppresses every otherwise valid setup
     # into the low 60s simply because one long contract costs more than $100.
     confidence = round(
-        (technical_score * 0.40)
-        + (options_score * 0.30)
-        + (market_score * 0.20)
+        (technical_score * 0.32)
+        + (options_score * 0.23)
+        + (expiration_score * 0.20)
+        + (market_score * 0.15)
         + (risk_score * 0.10)
     )
+    # Confidence is evidence-alignment, never a probability of profit.
+    # Short-dated / weak-delta contracts cannot receive an extreme confidence label.
+    if expiration_metrics["dte"] <= 21 or abs(expiration_metrics["directional_delta"] or 0) < 0.35:
+        confidence = min(confidence, 84)
     breakdown = ScoreBreakdown(
         technical_score=technical_score,
         options_score=options_score,
@@ -774,6 +899,8 @@ def analyze_trade(req: AnalyzeRequest) -> Recommendation:
         "absolute_max_loss_dollars": absolute_max_loss,
         "blocking_failures": list(dict.fromkeys(hard_failures)),
         "warnings": list(dict.fromkeys(warnings)),
+        "expiration_metrics": expiration_metrics,
+        "confidence_interpretation": "Evidence-alignment score only; not probability of profit or probability of reaching break-even.",
     })
 
     if hard_failures:
@@ -874,6 +1001,16 @@ def analyze_trade(req: AnalyzeRequest) -> Recommendation:
         max_profit=max_profit,
         break_even=break_even,
         spread_width=spread_width,
+        moneyness_percent=expiration_metrics["moneyness_percent"],
+        required_move_percent=expiration_metrics["required_move_percent"],
+        expected_move_dollars=expiration_metrics["expected_move_dollars"],
+        expected_move_percent=expiration_metrics["expected_move_percent"],
+        break_even_expected_move_multiple=expiration_metrics["break_even_expected_move_multiple"],
+        directional_delta=expiration_metrics["directional_delta"],
+        delta_interpretation=expiration_metrics["delta_interpretation"],
+        theta_per_day=expiration_metrics["theta_per_day"],
+        theta_interpretation=expiration_metrics["theta_interpretation"],
+        time_decay_risk=expiration_metrics["time_decay_risk"],
         price_basis=price_basis,
     )
 
@@ -894,7 +1031,7 @@ def analyze_trade(req: AnalyzeRequest) -> Recommendation:
         expected_holding_period="1-10 trading days",
         explanation=(
             f"{strategy_name} qualifies because verified technical, options-liquidity, market-alignment, and risk evidence passed the configured threshold. "
-            "This is decision support, not a guarantee of profit."
+            "The displayed confidence is an evidence-alignment score, not a probability of profit. This is decision support, not a guarantee of profit."
         ),
         risks=list(dict.fromkeys(warnings)),
         invalidation_conditions=[

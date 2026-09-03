@@ -145,6 +145,16 @@ class SuggestedOptionsOrder(BaseModel):
     max_profit: Optional[float] = None
     break_even: Optional[float] = None
     spread_width: Optional[float] = None
+    moneyness_percent: Optional[float] = None
+    required_move_percent: Optional[float] = None
+    expected_move_dollars: Optional[float] = None
+    expected_move_percent: Optional[float] = None
+    break_even_expected_move_multiple: Optional[float] = None
+    directional_delta: Optional[float] = None
+    delta_interpretation: Optional[str] = None
+    theta_per_day: Optional[float] = None
+    theta_interpretation: Optional[str] = None
+    time_decay_risk: Optional[str] = None
     price_basis: str = "Midpoint of current bid/ask"
     review_required: bool = True
     live_submission_enabled: bool = False
