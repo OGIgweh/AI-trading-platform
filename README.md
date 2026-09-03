@@ -112,3 +112,7 @@ The web and mobile clients now expose **Options**, **Stock**, and **Auto** modes
 - **Options:** options-only. Missing verified option-chain data returns `NO_TRADE`; stock is never substituted.
 - **Stock:** shares-only. The backend does not request or use an option chain.
 - **Auto:** evaluates options first and may use a defined-risk stock setup only when verified options data is unavailable.
+
+
+## Option Trade Structure
+Options and Auto modes include a strict **Single Leg / Multi Leg / Best Fit** selector. Single Leg permits Call/Put only; Multi Leg currently permits verified Vertical Call/Vertical Put debit spreads only; Best Fit can choose either.

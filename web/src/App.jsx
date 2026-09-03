@@ -34,7 +34,7 @@ import './style.css';
 const DEFAULT_SYMBOLS = ['AAPL', 'MSFT', 'NVDA', 'SPY', 'QQQ'];
 const WATCHLIST_STORAGE_KEY = 'ai-trading-platform-symbols';
 const ANALYSIS_SETTINGS_STORAGE_KEY = 'ai-trading-platform-analysis-settings';
-const DEFAULT_ANALYSIS_SETTINGS = { accountValue: 10000, minConfidence: 75, maxRiskPercent: 1, analysisMode: 'options' };
+const DEFAULT_ANALYSIS_SETTINGS = { accountValue: 10000, minConfidence: 75, maxRiskPercent: 1, analysisMode: 'options', optionStructure: 'auto' };
 
 const CHART_PERIODS = ['1mo', '3mo', '6mo', '1y', '5y'];
 const VERIFIED_DATA_SOURCES = new Set(['tradier_realtime', 'tradier_delayed', 'yahoo_chart_delayed', 'yfinance_delayed', 'stooq_eod', 'mixed_verified_providers']);
@@ -492,6 +492,9 @@ function App() {
         analysisMode: ['options', 'stock', 'auto'].includes(String(saved.analysisMode || '').toLowerCase())
           ? String(saved.analysisMode).toLowerCase()
           : DEFAULT_ANALYSIS_SETTINGS.analysisMode,
+        optionStructure: ['auto', 'single', 'multi'].includes(String(saved.optionStructure || '').toLowerCase())
+          ? String(saved.optionStructure).toLowerCase()
+          : DEFAULT_ANALYSIS_SETTINGS.optionStructure,
       };
     } catch {
       return DEFAULT_ANALYSIS_SETTINGS;
@@ -629,6 +632,16 @@ function App() {
     setAnalysisSettings((previous) => ({ ...previous, analysisMode: nextMode }));
     // Clear mode-dependent results so an options result is never mistaken for
     // a stock/auto result (or vice versa) after the selector changes.
+    setRec(null);
+    setRecs([]);
+    setChain([]);
+    setError('');
+  }
+
+  function changeOptionStructure(nextStructure) {
+    setAnalysisSettings((previous) => ({ ...previous, optionStructure: nextStructure }));
+    // Clear the old ticket so a single-leg recommendation cannot remain visible
+    // after switching to Multi Leg (or vice versa).
     setRec(null);
     setRecs([]);
     setChain([]);
@@ -886,6 +899,44 @@ function App() {
             </p>
           </div>
 
+          {analysisSettings.analysisMode !== 'stock' && (
+            <div className="assetModeSection optionStructureSection" aria-label="Option structure selector">
+              <div className="assetModeHeader">
+                <div>
+                  <span className="controlLabel">Option trade structure</span>
+                  <p>Choose whether options suggestions must be one leg, multiple legs, or whichever structure best fits the verified setup and risk budget.</p>
+                </div>
+                <strong>{analysisSettings.optionStructure === 'auto' ? 'BEST FIT' : analysisSettings.optionStructure === 'single' ? 'SINGLE LEG' : 'MULTI LEG'}</strong>
+              </div>
+              <div className="assetModeSelector" role="radiogroup" aria-label="Single Leg, Multi Leg, or Best Fit">
+                {[
+                  { value: 'single', label: 'Single Leg', description: 'Call or Put only. No spread substitution.' },
+                  { value: 'multi', label: 'Multi Leg', description: 'Defined-risk Vertical Call or Vertical Put only.' },
+                  { value: 'auto', label: 'Best Fit', description: 'Use a single leg when it fits; otherwise consider a vertical spread.' },
+                ].map((structure) => (
+                  <button
+                    key={structure.value}
+                    type="button"
+                    role="radio"
+                    aria-checked={analysisSettings.optionStructure === structure.value}
+                    className={analysisSettings.optionStructure === structure.value ? 'active' : ''}
+                    onClick={() => changeOptionStructure(structure.value)}
+                  >
+                    <b>{structure.label}</b>
+                    <small>{structure.description}</small>
+                  </button>
+                ))}
+              </div>
+              <p className="assetModeNotice">
+                {analysisSettings.optionStructure === 'single'
+                  ? 'Single Leg is strict: the engine may recommend only Schwab Call or Put. If the contract cannot satisfy risk and execution rules, the result is NO TRADE.'
+                  : analysisSettings.optionStructure === 'multi'
+                    ? 'Multi Leg is strict: the current engine may recommend only Schwab Vertical Call or Vertical Put. It will not substitute a single-leg Call/Put.'
+                    : 'Best Fit allows the engine to choose between a single Call/Put and a defined-risk Vertical Call/Put based on evidence, liquidity, and your configured risk budget.'}
+              </p>
+            </div>
+          )}
+
           <div className="analysisControls" aria-label="Analysis and risk controls">
             <label>
               <span>Account value</span>
@@ -1095,7 +1146,7 @@ function App() {
         </Card>
         <Card title="Implementation Notice" icon={<DollarSign />}>
           <p>
-            Options mode produces only Call, Put, Vertical Call, or Vertical Put tickets and returns NO TRADE when a verified chain is unavailable. Stock mode produces only share orders. Auto may choose either. The platform never invents contracts or places an order with Charles Schwab.
+            Options mode produces only options tickets and returns NO TRADE when a verified chain is unavailable. The Option Trade Structure selector can force Single Leg (Call/Put), Multi Leg (currently Vertical Call/Vertical Put), or Best Fit. Stock mode produces only share orders. The platform never invents contracts or places an order with Charles Schwab.
           </p>
         </Card>
       </section>

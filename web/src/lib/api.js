@@ -20,6 +20,7 @@ const DEFAULT_ANALYSIS_SETTINGS = {
   minConfidence: 75,
   maxRiskPercent: 1,
   analysisMode: 'options',
+  optionStructure: 'auto',
 };
 
 function normalizeSettings(settings = {}) {
@@ -36,6 +37,9 @@ function normalizeSettings(settings = {}) {
     analysisMode: ['options', 'stock', 'auto'].includes(String(settings.analysisMode || '').toLowerCase())
       ? String(settings.analysisMode).toLowerCase()
       : DEFAULT_ANALYSIS_SETTINGS.analysisMode,
+    optionStructure: ['auto', 'single', 'multi'].includes(String(settings.optionStructure || '').toLowerCase())
+      ? String(settings.optionStructure).toLowerCase()
+      : DEFAULT_ANALYSIS_SETTINGS.optionStructure,
   };
 }
 
@@ -56,6 +60,7 @@ export function analyze(symbol, strategy = 'auto', settings = DEFAULT_ANALYSIS_S
       symbol,
       account_value: normalized.accountValue,
       asset_mode: normalized.analysisMode,
+      option_structure: normalized.optionStructure,
       strategy,
       min_confidence: normalized.minConfidence,
       max_risk_percent: normalized.maxRiskPercent,
@@ -72,6 +77,7 @@ export function recommendations(symbols = ['AAPL', 'MSFT', 'NVDA', 'SPY', 'QQQ']
       symbols,
       account_value: normalized.accountValue,
       asset_mode: normalized.analysisMode,
+      option_structure: normalized.optionStructure,
       min_confidence: normalized.minConfidence,
       max_risk_percent: normalized.maxRiskPercent,
       include_no_trade: true,

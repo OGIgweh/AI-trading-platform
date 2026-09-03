@@ -20,11 +20,11 @@ async function searchStocks(query) {
   return r.json();
 }
 
-async function postAnalyze(symbol, assetMode) {
+async function postAnalyze(symbol, assetMode, optionStructure) {
   const r = await fetch(`${API}/ai/analyze`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ symbol, account_value: 10000, asset_mode: assetMode, strategy: 'auto', min_confidence: 75 }),
+    body: JSON.stringify({ symbol, account_value: 10000, asset_mode: assetMode, option_structure: optionStructure, strategy: 'auto', min_confidence: 75 }),
   });
   if (!r.ok) throw new Error(await apiError(r));
   return r.json();
@@ -43,6 +43,7 @@ export default function App() {
   const [searching, setSearching] = useState(false);
   const [rec, setRec] = useState(null);
   const [assetMode, setAssetMode] = useState('options');
+  const [optionStructure, setOptionStructure] = useState('auto');
   const [portfolio, setPortfolio] = useState(null);
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
@@ -94,7 +95,7 @@ export default function App() {
       const clean = requestedSymbol.trim().toUpperCase();
       setSymbol(clean);
       setSearchResults([]);
-      setRec(await postAnalyze(clean, assetMode));
+      setRec(await postAnalyze(clean, assetMode, optionStructure));
     } catch (e) {
       setError(e.message);
     } finally {
@@ -159,6 +160,29 @@ export default function App() {
                 ? 'Shares-only: option contracts are not evaluated.'
                 : 'Auto: options first, with stock fallback only when options data is unavailable.'}
           </Text>
+          {assetMode !== 'stock' ? (
+            <>
+              <Text style={[styles.label, { marginTop: 16 }]}>Option trade structure</Text>
+              <View style={styles.modeRow}>
+                {[['single', 'Single Leg'], ['multi', 'Multi Leg'], ['auto', 'Best Fit']].map(([value, label]) => (
+                  <TouchableOpacity
+                    key={value}
+                    style={[styles.modeButton, optionStructure === value && styles.modeButtonActive]}
+                    onPress={() => { setOptionStructure(value); setRec(null); }}
+                  >
+                    <Text style={[styles.modeButtonText, optionStructure === value && styles.modeButtonTextActive]}>{label}</Text>
+                  </TouchableOpacity>
+                ))}
+              </View>
+              <Text style={styles.modeHelp}>
+                {optionStructure === 'single'
+                  ? 'Single Leg: Call or Put only; no vertical spread substitution.'
+                  : optionStructure === 'multi'
+                    ? 'Multi Leg: defined-risk Vertical Call or Vertical Put only in the current engine.'
+                    : 'Best Fit: the engine may choose a single leg or vertical spread based on verified evidence and risk.'}
+              </Text>
+            </>
+          ) : null}
           {searching ? <ActivityIndicator style={{ marginTop: 10 }} /> : null}
           {searchResults.length > 0 ? (
             <View style={styles.searchResults}>

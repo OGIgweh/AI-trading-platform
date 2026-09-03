@@ -470,6 +470,7 @@ def analyze_trade(req: AnalyzeRequest) -> Recommendation:
         return _data_quality_no_trade(req, symbol, quote)
 
     asset_mode = req.asset_mode.lower()
+    option_structure = req.option_structure.lower()
     tech = technical_snapshot(symbol)
     market = market_context_snapshot()
     # Stock mode never requests an option chain. Options and Auto request it once.
@@ -485,6 +486,7 @@ def analyze_trade(req: AnalyzeRequest) -> Recommendation:
             "confidence_threshold": threshold,
             "risk_budget_dollars": round(req.account_value * req.max_risk_percent / 100, 2),
             "asset_mode": asset_mode,
+            "option_structure": option_structure,
         },
     }
 
@@ -590,10 +592,78 @@ def analyze_trade(req: AnalyzeRequest) -> Recommendation:
 
     spread = None
     selected_strategy = "single"
-    if single_quantity < 1:
+
+    if option_structure == "multi":
+        # Multi-leg is strict: never substitute a single long option. The current
+        # production engine supports defined-risk two-leg vertical debit spreads.
         spread = _best_debit_spread(chain, direction, req.account_value, req.max_risk_percent)
         if spread:
             selected_strategy = "debit_spread"
+        else:
+            market_score, market_evidence, market_failures = score_market(market, direction)
+            all_evidence.extend(market_evidence)
+            hard_failures.extend(market_failures)
+            blocker = (
+                "Multi Leg was selected, but no verified Vertical Call/Vertical Put spread fit the configured "
+                "liquidity, expiration, pricing, and risk requirements. The engine did not substitute a single-leg option."
+            )
+            hard_failures.append(blocker)
+            all_evidence.append(EvidenceItem(
+                category="Options",
+                name="Option structure requirement",
+                value={"selected_structure": "multi", "supported_multi_leg": ["Vertical Call", "Vertical Put"]},
+                signal="fail",
+                score=-100,
+                weight=1.0,
+                passed=False,
+                explanation=blocker,
+                data_source="verified_options_chain",
+            ))
+            breakdown = ScoreBreakdown(
+                technical_score=technical_score,
+                options_score=0,
+                market_score=market_score,
+                risk_score=0,
+                final_confidence=0,
+                threshold=threshold,
+            )
+            raw_data.update({
+                "selected_strategy": "multi_leg_unavailable",
+                "option_structure": option_structure,
+                "blocking_failures": list(dict.fromkeys(hard_failures)),
+            })
+            return _no_trade(
+                symbol,
+                threshold,
+                "NO TRADE RECOMMENDED. Multi Leg was selected, but no qualifying defined-risk vertical spread was available. A single-leg option was not substituted.",
+                list(dict.fromkeys(hard_failures)),
+                all_evidence,
+                raw_data,
+                breakdown,
+            )
+    elif option_structure == "single":
+        # Single-leg is strict: keep the selected long call/put even when a
+        # vertical spread could fit the account better. Risk sizing can still
+        # reject the trade, but the engine will not silently switch structures.
+        selected_strategy = "single"
+        all_evidence.append(EvidenceItem(
+            category="Options",
+            name="Option structure preference",
+            value="Single Leg",
+            signal="info",
+            score=0,
+            weight=0.0,
+            passed=True,
+            explanation="Single Leg was selected, so only a Call or Put may qualify; multi-leg spreads are not substituted.",
+            data_source="user_setting",
+        ))
+    else:
+        # Best Fit preserves the previous risk-first behavior: prefer a single
+        # long option when it fits, otherwise attempt a defined-risk vertical.
+        if single_quantity < 1:
+            spread = _best_debit_spread(chain, direction, req.account_value, req.max_risk_percent)
+            if spread:
+                selected_strategy = "debit_spread"
 
     if selected_strategy == "single":
         contract = single_contract
@@ -628,14 +698,18 @@ def analyze_trade(req: AnalyzeRequest) -> Recommendation:
         }
         all_evidence.append(EvidenceItem(
             category="Options",
-            name="Defined-risk spread fallback",
-            value={"net_debit": entry_price, "width": spread["width"], "quantity": quantity},
+            name="Multi-leg vertical selection" if option_structure == "multi" else "Defined-risk spread fallback",
+            value={"net_debit": entry_price, "width": spread["width"], "quantity": quantity, "option_structure": option_structure},
             signal="pass",
             score=20,
             weight=0.20,
             passed=True,
-            explanation="A debit spread was selected because a single long option did not fit the configured risk budget. Maximum loss is limited to the net debit.",
-            data_source="yfinance_delayed_options",
+            explanation=(
+                "A two-leg vertical debit spread was selected because Multi Leg was requested. Maximum loss is limited to the net debit."
+                if option_structure == "multi"
+                else "A debit spread was selected because a single long option did not fit the configured risk budget. Maximum loss is limited to the net debit."
+            ),
+            data_source="verified_options_chain",
         ))
 
     all_evidence.extend(options_evidence)
@@ -684,6 +758,7 @@ def analyze_trade(req: AnalyzeRequest) -> Recommendation:
 
     raw_data.update({
         "selected_strategy": selected_strategy,
+        "option_structure": option_structure,
         "schwab_strategy_name": strategy_name,
         "strategy_structure": (
             "Buy lower-strike call and sell higher-strike call with the same expiration"
@@ -845,6 +920,7 @@ def generate_recommendations(req: RecommendationsRequest):
             symbol=symbol,
             account_value=req.account_value,
             asset_mode=req.asset_mode,
+            option_structure=req.option_structure,
             strategy="auto",
             min_confidence=req.min_confidence,
             max_risk_percent=req.max_risk_percent,
@@ -855,6 +931,6 @@ def generate_recommendations(req: RecommendationsRequest):
     return {
         "mode": "paper_decision_support",
         "live_trading_enabled": False,
-        "message": f"Recommendations ran in {req.asset_mode.upper()} mode. Options mode never substitutes stock; Stock mode evaluates shares only; Auto may use shares only when verified options data is unavailable.",
+        "message": f"Recommendations ran in {req.asset_mode.upper()} mode with {req.option_structure.upper()} option structure. Options mode never substitutes stock; Single Leg never substitutes a spread; Multi Leg currently uses qualified Vertical Call/Vertical Put structures only; Best Fit may choose either.",
         "recommendations": results,
     }
