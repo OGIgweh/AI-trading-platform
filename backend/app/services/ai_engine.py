@@ -28,6 +28,8 @@ from app.services.risk import (
     spread_contracts,
 )
 from app.services.scoring_engine import score_market, score_options, score_risk, score_technical
+from app.services.social_intelligence import social_intelligence_snapshot
+from app.services.verified_strategy_intelligence import verified_strategy_intelligence_snapshot, verified_strategy_alignment_adjustment
 
 
 PLANNED_STOP_FRACTION = 0.25
@@ -428,7 +430,9 @@ def _equity_recommendation(
     if quantity < 1:
         hard_failures.append("No stock position fits the configured risk and notional limits.")
 
+    verified_strategy_adjustment = int(raw_data.get("verified_strategy_adjustment") or 0)
     confidence = round((technical_score * 0.60) + (market_score * 0.25) + (risk_score * 0.15))
+    confidence = max(0, min(100, confidence + verified_strategy_adjustment))
     if quote.data_source == "stooq_eod":
         confidence = max(0, confidence - 4)
     breakdown = ScoreBreakdown(
@@ -436,6 +440,7 @@ def _equity_recommendation(
         options_score=0,
         market_score=market_score,
         risk_score=risk_score,
+        verified_strategy_score=int(raw_data.get("verified_strategy_intelligence", {}).get("quality_score") or 0),
         final_confidence=confidence,
         threshold=req.min_confidence,
     )
@@ -588,10 +593,14 @@ def analyze_trade(req: AnalyzeRequest) -> Recommendation:
     market = market_context_snapshot()
     # Stock mode never requests an option chain. Options and Auto request it once.
     chain = get_option_chain(symbol) if asset_mode in {"options", "auto"} else []
+    social = social_intelligence_snapshot(symbol)
+    verified_strategy = verified_strategy_intelligence_snapshot(symbol)
     raw_data = {
         "quote": quote.model_dump(),
         "technical": tech,
         "market_context": market,
+        "social_intelligence": social,
+        "verified_strategy_intelligence": verified_strategy,
         "options_contract_count": len(chain),
         "analysis_settings": {
             "account_value": req.account_value,
@@ -607,6 +616,63 @@ def analyze_trade(req: AnalyzeRequest) -> Recommendation:
     hard_failures: list[str] = []
     warnings: list[str] = []
 
+    # Social/whale intelligence is supplemental. It is asset-specific and does
+    # not alter equity/equity-option confidence when the signal is crypto-only.
+    if social.get("applicable"):
+        consensus = social.get("consensus", "UNAVAILABLE")
+        social_signal = "bullish" if consensus == "BULLISH" else "bearish" if consensus == "BEARISH" else "neutral"
+        all_evidence.append(EvidenceItem(
+            category="Social / Whale",
+            name="Top-trader consensus",
+            value={
+                "consensus": consensus,
+                "score": social.get("score"),
+                "confidence": social.get("confidence"),
+                "qualified_traders": social.get("qualified_traders"),
+                "providers": social.get("providers_used", []),
+            },
+            signal=social_signal,
+            score=int((social.get("score", 50) or 50) - 50),
+            weight=0.0,
+            passed=social.get("status") == "verified",
+            explanation="Supplemental asset-matched social/whale consensus. It is not a standalone trade trigger and is not treated as probability of profit.",
+            data_source="+".join(social.get("providers_used", [])) or "social_unavailable",
+        ))
+    else:
+        all_evidence.append(EvidenceItem(
+            category="Social / Whale",
+            name="Crypto social intelligence applicability",
+            value=social.get("status"),
+            signal="info",
+            score=0,
+            weight=0.0,
+            passed=True,
+            explanation=social.get("message", "Crypto social intelligence is not applied to this equity recommendation."),
+            data_source="not_applicable",
+        ))
+
+    all_evidence.append(EvidenceItem(
+        category="Verified Strategy",
+        name="AlphaLedger verified-strategy quality",
+        value={
+            "status": verified_strategy.get("status"),
+            "quality_score": verified_strategy.get("quality_score"),
+            "consensus": verified_strategy.get("consensus"),
+            "matched_strategies": verified_strategy.get("matched_strategies"),
+            "qualified_strategies": verified_strategy.get("qualified_strategies"),
+        },
+        signal=(
+            "bullish" if verified_strategy.get("consensus") == "BULLISH"
+            else "bearish" if verified_strategy.get("consensus") == "BEARISH"
+            else "info"
+        ),
+        score=int((verified_strategy.get("score", 50) or 50) - 50),
+        weight=0.0,
+        passed=verified_strategy.get("status") in {"verified", "metrics_only"},
+        explanation=verified_strategy.get("message", "Verified strategy intelligence is supplemental and never creates a trade by itself."),
+        data_source="+".join(verified_strategy.get("providers_used", [])) or "alphaledger_unavailable",
+    ))
+
     technical_score, inferred_direction, tech_evidence, tech_failures = score_technical(tech)
     all_evidence.extend(tech_evidence)
     hard_failures.extend(tech_failures)
@@ -618,6 +684,27 @@ def analyze_trade(req: AnalyzeRequest) -> Recommendation:
         direction = "PUT"
     else:
         direction = inferred_direction
+
+    verified_strategy_adjustment, verified_strategy_note = verified_strategy_alignment_adjustment(verified_strategy, direction)
+    raw_data["verified_strategy_adjustment"] = verified_strategy_adjustment
+    raw_data["verified_strategy_adjustment_note"] = verified_strategy_note
+    if direction != "NO_TRADE":
+        all_evidence.append(EvidenceItem(
+            category="Verified Strategy",
+            name="Asset-matched AlphaLedger alignment",
+            value={
+                "consensus": verified_strategy.get("consensus"),
+                "confidence": verified_strategy.get("confidence"),
+                "matched_strategies": verified_strategy.get("matched_strategies"),
+                "adjustment": verified_strategy_adjustment,
+            },
+            signal="bullish" if verified_strategy_adjustment > 0 else "bearish" if verified_strategy_adjustment < 0 else "neutral",
+            score=max(-100, min(100, verified_strategy_adjustment * 10)),
+            weight=0.0,
+            passed=verified_strategy_adjustment != 0,
+            explanation=verified_strategy_note,
+            data_source="alphaledger" if verified_strategy.get("providers_used") else "alphaledger_unavailable",
+        ))
 
     if direction == "NO_TRADE":
         technical_verified = is_verified_history_source(tech.get("data_source"))
@@ -863,6 +950,7 @@ def analyze_trade(req: AnalyzeRequest) -> Recommendation:
         + (market_score * 0.15)
         + (risk_score * 0.10)
     )
+    confidence = max(0, min(100, confidence + int(raw_data.get("verified_strategy_adjustment") or 0)))
     # Confidence is evidence-alignment, never a probability of profit.
     # Short-dated / weak-delta contracts cannot receive an extreme confidence label.
     if expiration_metrics["dte"] <= 21 or abs(expiration_metrics["directional_delta"] or 0) < 0.35:
@@ -872,6 +960,7 @@ def analyze_trade(req: AnalyzeRequest) -> Recommendation:
         options_score=options_score,
         market_score=market_score,
         risk_score=risk_score,
+        verified_strategy_score=int(raw_data.get("verified_strategy_intelligence", {}).get("quality_score") or 0),
         final_confidence=confidence,
         threshold=threshold,
     )

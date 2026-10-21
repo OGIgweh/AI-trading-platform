@@ -95,6 +95,7 @@ class ScoreBreakdown(BaseModel):
     options_score: int = 0
     market_score: int = 0
     risk_score: int = 0
+    verified_strategy_score: int = 0
     final_confidence: int = 0
     threshold: int = 75
 

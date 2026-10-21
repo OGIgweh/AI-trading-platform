@@ -36,6 +36,18 @@ async function getPortfolio() {
   return r.json();
 }
 
+async function getSocialIntelligence(symbol = 'BTC') {
+  const r = await fetch(`${API}/social/intelligence/${encodeURIComponent(symbol)}`);
+  if (!r.ok) throw new Error(await apiError(r));
+  return r.json();
+}
+
+async function getVerifiedStrategyIntelligence(symbol) {
+  const r = await fetch(`${API}/verified-strategy/intelligence/${encodeURIComponent(symbol)}`);
+  if (!r.ok) throw new Error(await apiError(r));
+  return r.json();
+}
+
 export default function App() {
   const [authed, setAuthed] = useState(false);
   const [symbol, setSymbol] = useState('AAPL');
@@ -47,6 +59,11 @@ export default function App() {
   const [portfolio, setPortfolio] = useState(null);
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
+  const [socialAsset, setSocialAsset] = useState('BTC');
+  const [socialData, setSocialData] = useState(null);
+  const [socialLoading, setSocialLoading] = useState(false);
+  const [verifiedStrategyData, setVerifiedStrategyData] = useState(null);
+  const [verifiedStrategyLoading, setVerifiedStrategyLoading] = useState(false);
 
   useEffect(() => {
     async function init() {
@@ -60,6 +77,8 @@ export default function App() {
         }
         const p = await getPortfolio();
         setPortfolio(p);
+        setSocialData(await getSocialIntelligence('BTC'));
+        setVerifiedStrategyData(await getVerifiedStrategyIntelligence('AAPL'));
       } catch (e) {
         setError(e.message);
         setAuthed(true);
@@ -96,10 +115,36 @@ export default function App() {
       setSymbol(clean);
       setSearchResults([]);
       setRec(await postAnalyze(clean, assetMode, optionStructure));
+      await loadVerifiedStrategy(clean);
     } catch (e) {
       setError(e.message);
     } finally {
       setLoading(false);
+    }
+  }
+
+  async function loadSocial(asset) {
+    setSocialAsset(asset);
+    setSocialLoading(true);
+    try {
+      setSocialData(await getSocialIntelligence(asset));
+    } catch (e) {
+      setSocialData({ consensus: 'UNAVAILABLE', score: 50, confidence: 0, qualified_traders: 0, message: e.message, top_traders: [] });
+    } finally {
+      setSocialLoading(false);
+    }
+  }
+
+  async function loadVerifiedStrategy(requestedSymbol) {
+    const clean = String(requestedSymbol || '').trim().toUpperCase();
+    if (!clean) return;
+    setVerifiedStrategyLoading(true);
+    try {
+      setVerifiedStrategyData(await getVerifiedStrategyIntelligence(clean));
+    } catch (e) {
+      setVerifiedStrategyData({ symbol: clean, consensus: 'N/A', quality_score: 0, matched_strategies: 0, message: e.message, top_strategies: [] });
+    } finally {
+      setVerifiedStrategyLoading(false);
     }
   }
 
@@ -205,6 +250,39 @@ export default function App() {
             {rec.risks?.map((r, i) => <Text key={i} style={styles.text}>• {r}</Text>)}
           </View>}
         </View>
+        <View style={styles.card}>
+          <Text style={styles.label}>Social / Whale Intelligence</Text>
+          <View style={styles.modeRow}>
+            {['BTC', 'ETH', 'SOL', 'HYPE', 'ARB'].map((asset) => (
+              <TouchableOpacity key={asset} style={[styles.socialAssetButton, socialAsset === asset && styles.modeButtonActive]} onPress={() => loadSocial(asset)}>
+                <Text style={[styles.modeButtonText, socialAsset === asset && styles.modeButtonTextActive]}>{asset}</Text>
+              </TouchableOpacity>
+            ))}
+          </View>
+          {socialLoading ? <ActivityIndicator style={{ marginTop: 12 }} /> : (
+            <>
+              <Text style={styles.socialConsensus}>{socialData?.consensus || 'UNAVAILABLE'} · {socialData?.score ?? 50}/100</Text>
+              <Text style={styles.text}>Coverage confidence: {socialData?.confidence ?? 0}% · Qualified traders: {socialData?.qualified_traders ?? 0}</Text>
+              <Text style={styles.muted}>{socialData?.message || 'Configure an authorized Invo endpoint or explicit Hyperliquid wallets to populate this signal.'}</Text>
+            </>
+          )}
+        </View>
+        <View style={styles.card}>
+          <Text style={styles.label}>Verified Strategy Intelligence</Text>
+          {verifiedStrategyLoading ? <ActivityIndicator style={{ marginTop: 12 }} /> : (
+            <>
+              <Text style={styles.socialConsensus}>{verifiedStrategyData?.consensus || 'N/A'} · Quality {verifiedStrategyData?.quality_score ?? 0}/100</Text>
+              <Text style={styles.text}>Matched strategies: {verifiedStrategyData?.matched_strategies ?? 0} · Reviewed: {verifiedStrategyData?.strategies_reviewed ?? 0}</Text>
+              <Text style={styles.muted}>{verifiedStrategyData?.message || 'Configure an authorized AlphaLedger JSON endpoint to populate verified strategy intelligence.'}</Text>
+              {(verifiedStrategyData?.top_strategies || []).slice(0, 3).map((strategy, index) => (
+                <View key={`${strategy.alphaledger_id || strategy.strategy_name}-${index}`} style={styles.strategyMiniRow}>
+                  <Text style={styles.text}>{strategy.strategy_name}</Text>
+                  <Text style={styles.muted}>Alpha {Number(strategy.alpha_score || 0).toFixed(0)} · Sharpe {Number(strategy.sharpe_ratio || 0).toFixed(2)} · Max DD {Number(strategy.max_drawdown_percent || 0).toFixed(1)}%</Text>
+                </View>
+              ))}
+            </>
+          )}
+        </View>
         <View style={styles.card}><Text style={styles.label}>Risk Center</Text><Text style={styles.text}>Max risk per trade: 1%</Text><Text style={styles.text}>Emergency stop: ready</Text><Text style={styles.text}>Broker execution: disabled</Text></View>
       </ScrollView>
     </SafeAreaView>
@@ -235,6 +313,9 @@ const styles = StyleSheet.create({
   modeButtonText: { color: '#cbd5e1', fontWeight: '800' },
   modeButtonTextActive: { color: '#ffffff' },
   modeHelp: { color: '#94a3b8', fontSize: 12, lineHeight: 17, marginTop: 8 },
+  socialAssetButton: { flex: 1, minWidth: 52, paddingVertical: 9, paddingHorizontal: 6, borderRadius: 10, borderColor: '#334155', borderWidth: 1, backgroundColor: '#0b1020', alignItems: 'center' },
+  socialConsensus: { color: '#fff', fontWeight: '900', fontSize: 19, marginTop: 14 },
+  strategyMiniRow: { marginTop: 10, paddingTop: 10, borderTopColor: '#25314d', borderTopWidth: 1 },
   noTrade: { borderLeftColor: '#f59e0b', borderLeftWidth: 5, backgroundColor: '#1f2937', borderRadius: 12, padding: 14, marginTop: 14 },
   trade: { borderLeftColor: '#22c55e', borderLeftWidth: 5, backgroundColor: '#13251b', borderRadius: 12, padding: 14, marginTop: 14 },
   result: { color: '#fff', fontWeight: '900', fontSize: 18 },

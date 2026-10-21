@@ -119,3 +119,15 @@ Options and Auto modes include a strict **Single Leg / Multi Leg / Best Fit** se
 
 ## Probability-sensitive option qualification
 The options engine now checks moneyness, DTE, IV-implied expected move, break-even distance, directional delta, and time-decay exposure before producing a broker ticket. The displayed AI confidence is evidence alignment, not probability of profit. See `docs/PROBABILITY_SENSITIVE_OPTION_QUALIFICATION.md`.
+
+## Social / Whale Intelligence
+
+This build adds a supplemental crypto social-intelligence layer. It can ingest an authorized Invo/export JSON endpoint when configured and can independently evaluate explicitly configured Hyperliquid public wallets through Hyperliquid's public info API.
+
+The dashboard exposes BTC, ETH, SOL, HYPE, and ARB consensus with weighted win-rate/sample-size qualification. The signal is deliberately isolated from equity/equity-option confidence: crypto trader activity does not inflate AAPL/SPY/etc. recommendations.
+
+Configuration is documented in `docs/SOCIAL_WHALE_INTELLIGENCE.md` and `backend/.env.example`.
+
+## Verified Strategy Intelligence
+
+The platform includes an AlphaLedger-ready verified strategy adapter. It scores authorized strategy records using Alpha Score, Sharpe ratio, maximum drawdown, track-record duration, ownership validation, and audit status. Historical performance alone is informational; recommendation confidence can change only when an authorized feed explicitly reports qualified current exposure to the same analyzed ticker. See `docs/VERIFIED_STRATEGY_INTELLIGENCE.md`.

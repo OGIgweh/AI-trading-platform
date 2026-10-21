@@ -28,6 +28,8 @@ import {
   options,
   history,
   searchStocks,
+  socialIntelligence,
+  verifiedStrategyIntelligence,
 } from './lib/api';
 import './style.css';
 
@@ -176,6 +178,7 @@ function ScoreBreakdown({ score }) {
       <span>Options <b>{score.options_score}</b></span>
       <span>Market <b>{score.market_score}</b></span>
       <span>Risk <b>{score.risk_score}</b></span>
+      <span>Verified Strategy <b>{score.verified_strategy_score ?? 0}</b></span>
       <span>Final <b>{score.final_confidence}</b></span>
       <span>Threshold <b>{score.threshold}</b></span>
     </div>
@@ -480,6 +483,101 @@ function SuggestedOrderTicket({ rec, currentQuote }) {
   );
 }
 
+
+function SocialWhalePanel({ data, asset, onAssetChange, loading }) {
+  const assets = ['BTC', 'ETH', 'SOL', 'HYPE', 'ARB'];
+  const consensus = data?.consensus || 'UNAVAILABLE';
+  const traders = data?.top_traders || [];
+  return (
+    <Card title="Social / Whale Intelligence" className="socialWhaleCard">
+      <div className="socialAssetSelector" role="radiogroup" aria-label="Crypto social intelligence asset">
+        {assets.map((item) => (
+          <button
+            type="button"
+            key={item}
+            onClick={() => onAssetChange(item)}
+            className={item === asset ? 'active' : ''}
+            aria-checked={item === asset}
+            role="radio"
+          >{item}</button>
+        ))}
+      </div>
+      {loading ? <p>Loading verified social/whale data…</p> : (
+        <>
+          <div className="socialSummary">
+            <div><span>Consensus</span><strong className={consensus === 'BULLISH' ? 'positive' : consensus === 'BEARISH' ? 'negative' : ''}>{consensus}</strong></div>
+            <div><span>Directional score</span><strong>{data?.score ?? 50}/100</strong></div>
+            <div><span>Coverage confidence</span><strong>{data?.confidence ?? 0}%</strong></div>
+            <div><span>Qualified traders</span><strong>{data?.qualified_traders ?? 0}</strong></div>
+          </div>
+          <p className="socialNotice">{data?.message || 'No social/whale provider data is configured yet.'}</p>
+          <div className="providerPills">
+            {(data?.providers_used || []).length
+              ? data.providers_used.map((provider) => <span key={provider}>{provider}</span>)
+              : <span>Provider not configured</span>}
+          </div>
+          {traders.length > 0 && (
+            <div className="socialTraderList">
+              {traders.slice(0, 6).map((trader, index) => (
+                <div className="socialTrader" key={`${trader.wallet || trader.trader}-${index}`}>
+                  <div><strong>{trader.trader}</strong><span>{trader.provider}</span></div>
+                  <div><span>Direction</span><b className={trader.direction === 'LONG' ? 'positive' : trader.direction === 'SHORT' ? 'negative' : ''}>{trader.direction}</b></div>
+                  <div><span>Win rate</span><b>{Math.round(Number(trader.win_rate || 0) * 100)}%</b></div>
+                  <div><span>Closed sample</span><b>{trader.closed_trades || 0}</b></div>
+                  <div><span>Current P/L</span><b>{Number(trader.current_pnl_percent || 0).toFixed(2)}%</b></div>
+                </div>
+              ))}
+            </div>
+          )}
+          <small className="confidenceClarifier">Supplemental signal only. Win rate is weighted with sample size and active direction; it never creates a trade by itself.</small>
+        </>
+      )}
+    </Card>
+  );
+}
+
+function VerifiedStrategyPanel({ data, symbol, loading }) {
+  const strategies = data?.top_strategies || [];
+  const consensus = data?.consensus || 'N/A';
+  return (
+    <Card title="Verified Strategy Intelligence" className="verifiedStrategyCard">
+      {loading ? <p>Loading AlphaLedger strategy intelligence…</p> : (
+        <>
+          <div className="socialSummary">
+            <div><span>Selected ticker</span><strong>{symbol || '—'}</strong></div>
+            <div><span>Directional consensus</span><strong className={consensus === 'BULLISH' ? 'positive' : consensus === 'BEARISH' ? 'negative' : ''}>{consensus}</strong></div>
+            <div><span>Strategy quality</span><strong>{data?.quality_score ?? 0}/100</strong></div>
+            <div><span>Matched strategies</span><strong>{data?.matched_strategies ?? 0}</strong></div>
+          </div>
+          <p className="socialNotice">{data?.message || 'AlphaLedger authorized data is not configured yet.'}</p>
+          <div className="providerPills">
+            {(data?.providers_used || []).length
+              ? data.providers_used.map((provider) => <span key={provider}>{provider}</span>)
+              : <span>AlphaLedger adapter ready · endpoint not configured</span>}
+          </div>
+          {strategies.length > 0 && (
+            <div className="verifiedStrategyList">
+              {strategies.slice(0, 6).map((strategy, index) => (
+                <div className="verifiedStrategyRow" key={`${strategy.alphaledger_id || strategy.strategy_name}-${index}`}>
+                  <div><strong>{strategy.strategy_name}</strong><span>{strategy.provider_name}</span></div>
+                  <div><span>Alpha Score</span><b>{Number(strategy.alpha_score || 0).toFixed(0)}</b></div>
+                  <div><span>Sharpe</span><b>{Number(strategy.sharpe_ratio || 0).toFixed(2)}</b></div>
+                  <div><span>Max DD</span><b>{Number(strategy.max_drawdown_percent || 0).toFixed(1)}%</b></div>
+                  <div><span>Audit</span><b>{strategy.audit_active ? 'Active' : 'Not active'}</b></div>
+                  <div><span>Match</span><b className={strategy.matched_direction === 'LONG' ? 'positive' : strategy.matched_direction === 'SHORT' ? 'negative' : ''}>{strategy.matched_direction || 'Metrics only'}</b></div>
+                </div>
+              ))}
+            </div>
+          )}
+          <small className="confidenceClarifier">
+            AlphaLedger metrics only adjust confidence when an authorized feed reports qualified, ownership-validated strategies with current exposure to this exact ticker. Generic leaderboard performance never creates a trade signal.
+          </small>
+        </>
+      )}
+    </Card>
+  );
+}
+
 function App() {
   const [portfolio, setPortfolio] = useState(null);
   const [symbol, setSymbol] = useState('AAPL');
@@ -504,6 +602,11 @@ function App() {
   const [recs, setRecs] = useState([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
+  const [socialAsset, setSocialAsset] = useState('BTC');
+  const [socialData, setSocialData] = useState(null);
+  const [socialLoading, setSocialLoading] = useState(false);
+  const [verifiedStrategyData, setVerifiedStrategyData] = useState(null);
+  const [verifiedStrategyLoading, setVerifiedStrategyLoading] = useState(false);
   const [analysisSettings, setAnalysisSettings] = useState(() => {
     try {
       const saved = JSON.parse(localStorage.getItem(ANALYSIS_SETTINGS_STORAGE_KEY) || '{}');
@@ -526,6 +629,8 @@ function App() {
   useEffect(() => {
     getPortfolio().then(setPortfolio).catch(() => setError('Unable to load portfolio summary.'));
     refreshAll();
+    loadSocial('BTC');
+    loadVerifiedStrategy('AAPL');
   }, []);
 
   useEffect(() => {
@@ -556,6 +661,55 @@ function App() {
     }, 350);
     return () => window.clearTimeout(timer);
   }, [searchTerm]);
+
+  async function loadSocial(asset = socialAsset) {
+    setSocialLoading(true);
+    try {
+      const data = await socialIntelligence(asset);
+      setSocialData(data);
+    } catch (err) {
+      setSocialData({
+        symbol: asset,
+        consensus: 'UNAVAILABLE',
+        score: 50,
+        confidence: 0,
+        qualified_traders: 0,
+        top_traders: [],
+        providers_used: [],
+        message: err.message || 'Social/whale intelligence is temporarily unavailable.',
+      });
+    } finally {
+      setSocialLoading(false);
+    }
+  }
+
+  function changeSocialAsset(asset) {
+    setSocialAsset(asset);
+    loadSocial(asset);
+  }
+
+  async function loadVerifiedStrategy(requestedSymbol = symbol) {
+    const clean = String(requestedSymbol || '').toUpperCase().trim();
+    if (!clean) return;
+    setVerifiedStrategyLoading(true);
+    try {
+      const data = await verifiedStrategyIntelligence(clean);
+      setVerifiedStrategyData(data);
+    } catch (err) {
+      setVerifiedStrategyData({
+        symbol: clean,
+        status: 'unavailable',
+        consensus: 'N/A',
+        quality_score: 0,
+        matched_strategies: 0,
+        top_strategies: [],
+        providers_used: [],
+        message: err.message || 'Verified strategy intelligence is temporarily unavailable.',
+      });
+    } finally {
+      setVerifiedStrategyLoading(false);
+    }
+  }
 
   async function refreshAll() {
     setLoading(true);
@@ -608,6 +762,7 @@ function App() {
       // Analyze first. The analysis response already contains the verified quote,
       // which avoids three simultaneous Yahoo requests for the same ticker.
       const recommendationData = await analyze(clean, 'auto', analysisSettings);
+      await loadVerifiedStrategy(recommendationData.symbol || clean);
       const quoteData = recommendationData?.raw_data?.quote || null;
       let chainData = [];
 
@@ -1161,6 +1316,26 @@ function App() {
       </section>
 
       <section className="grid two">
+        <SocialWhalePanel
+          data={socialData}
+          asset={socialAsset}
+          onAssetChange={changeSocialAsset}
+          loading={socialLoading}
+        />
+        <VerifiedStrategyPanel
+          data={verifiedStrategyData}
+          symbol={symbol}
+          loading={verifiedStrategyLoading}
+        />
+      </section>
+
+      <section className="grid two">
+        <Card title="Intelligence Controls">
+          <p><b>Invo:</b> Authorized/export JSON only; undocumented app endpoints are not scraped.</p>
+          <p><b>Hyperliquid:</b> Public wallet intelligence only for wallet addresses explicitly configured by the user.</p>
+          <p><b>AlphaLedger:</b> Authorized/export JSON only. Alpha Score, Sharpe, drawdown, track-record length, ownership validation, and audit status are used to judge strategy quality.</p>
+          <p><b>Symbol matching:</b> AlphaLedger changes recommendation confidence only when a qualified strategy explicitly reports current exposure to the same ticker. Generic leaderboard metrics remain informational.</p>
+        </Card>
         <Card title="Risk Center">
           <p>Portfolio risk score: <b>Medium</b></p>
           <p>Max risk per trade: <b>1%</b></p>
