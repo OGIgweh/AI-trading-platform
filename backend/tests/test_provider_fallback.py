@@ -27,6 +27,7 @@ def _history(source: str = "stooq_eod", rows: int = 252):
 def test_quote_falls_back_to_stooq_instead_of_zero(monkeypatch):
     market_data._lookup_quote_cached.cache_clear()
     monkeypatch.setattr(market_data, "tradier_enabled", lambda: False)
+    monkeypatch.setattr(market_data, "fetch_yahoo_chart_history", lambda *args: None)
     monkeypatch.setattr(market_data, "fetch_stooq_history", lambda symbol, period: _history())
     monkeypatch.setattr(
         market_data,
@@ -65,7 +66,7 @@ def test_equity_recommendation_when_options_provider_is_unavailable(monkeypatch)
         volume=1_500_000,
         market_status="OPEN",
         data_source="stooq_eod",
-        as_of=datetime(2026, 8, 3).isoformat(),
+        as_of=ai_engine.latest_completed_session(ai_engine.now_et()).isoformat(),
         previous_close=158,
         day_low=157,
         day_high=161,

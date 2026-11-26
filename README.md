@@ -58,9 +58,18 @@ The mobile backend URL is in `mobile/app.json`:
 
 ```bash
 cd web
-npm install
+npm ci
 npm run dev
 ```
+
+Start the backend on port 8000 first. Vite proxies `/api` to it. For a
+separately hosted backend, set `VITE_API_URL` to its full API URL including
+`/api` before starting or building the web app. For mobile, set
+`EXPO_PUBLIC_API_URL` or update `extra.apiUrl` in `mobile/app.json`.
+
+The evidence score is a heuristic on a 0–100 scale. Recommendations require
+timestamped quotes and the latest completed regular session of daily history.
+Stock sizing uses a planned stop, and realized losses can exceed that amount.
 
 ## Safety
 

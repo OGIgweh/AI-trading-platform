@@ -11,6 +11,7 @@ def _quote():
         volume=10_000_000,
         market_status="OPEN",
         data_source="yfinance_delayed",
+        as_of=ai_engine.now_et().isoformat(),
     )
 
 

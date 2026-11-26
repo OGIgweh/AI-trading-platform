@@ -1,9 +1,11 @@
+from datetime import timedelta
+
 from app.models.schemas import AnalyzeRequest, OptionContract, Quote
 from app.services import ai_engine
 
 
 def _quote():
-    return Quote(symbol="QQQ", price=700.0, change=5.0, change_percent=0.72, volume=20_000_000, market_status="OPEN", data_source="yfinance_delayed")
+    return Quote(symbol="QQQ", price=700.0, change=5.0, change_percent=0.72, volume=20_000_000, market_status="OPEN", data_source="yfinance_delayed", as_of=ai_engine.now_et().isoformat())
 
 
 def _technical():
@@ -23,7 +25,7 @@ def _call(symbol, strike, bid, ask, delta):
     return OptionContract(
         symbol=symbol, contract_type="CALL", strike=strike, bid=bid, ask=ask, volume=1500, open_interest=6000,
         implied_volatility=0.30, delta=delta, gamma=0.0, theta=0.0, vega=0.0, spread_percent=1.0,
-        expiration="2026-09-18", days_to_expiration=35, data_source="yfinance_delayed_options",
+        expiration=(ai_engine.now_et().date() + timedelta(days=35)).isoformat(), days_to_expiration=35, data_source="yfinance_delayed_options",
     )
 
 

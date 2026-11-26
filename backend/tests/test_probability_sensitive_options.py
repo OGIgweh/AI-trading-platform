@@ -1,9 +1,11 @@
+from datetime import timedelta
+
 from app.models.schemas import AnalyzeRequest, OptionContract, Quote
 from app.services import ai_engine
 
 
 def _quote():
-    return Quote(symbol="AAPL", price=327.14, change=2.18, change_percent=0.67, volume=22_000_000, market_status="OPEN", data_source="yahoo_chart_delayed")
+    return Quote(symbol="AAPL", price=327.14, change=2.18, change_percent=0.67, volume=22_000_000, market_status="OPEN", data_source="yahoo_chart_delayed", as_of=ai_engine.now_et().isoformat())
 
 
 def _technical():
@@ -22,7 +24,7 @@ def test_far_otm_short_dte_call_is_blocked(monkeypatch):
     contract = OptionContract(
         symbol="AAPL260918C00345000", contract_type="CALL", strike=345, bid=1.40, ask=1.49,
         volume=1000, open_interest=5000, implied_volatility=0.24, delta=0.26, gamma=0, theta=0, vega=0,
-        spread_percent=6.2, expiration="2026-09-18", days_to_expiration=15, data_source="yfinance_delayed_options",
+        spread_percent=6.2, expiration=(ai_engine.now_et().date() + timedelta(days=15)).isoformat(), days_to_expiration=15, data_source="yfinance_delayed_options",
     )
     monkeypatch.setattr(ai_engine, "get_quote", lambda symbol: _quote())
     monkeypatch.setattr(ai_engine, "technical_snapshot", lambda symbol: _technical())
@@ -38,7 +40,7 @@ def test_qualified_order_exposes_probability_metrics(monkeypatch):
     contract = OptionContract(
         symbol="AAPL261016C00330000", contract_type="CALL", strike=330, bid=8.0, ask=8.2,
         volume=2000, open_interest=9000, implied_volatility=0.28, delta=0.48, gamma=0, theta=-0.12, vega=0,
-        spread_percent=2.5, expiration="2026-10-16", days_to_expiration=43, data_source="yfinance_delayed_options",
+        spread_percent=2.5, expiration=(ai_engine.now_et().date() + timedelta(days=43)).isoformat(), days_to_expiration=43, data_source="yfinance_delayed_options",
     )
     monkeypatch.setattr(ai_engine, "get_quote", lambda symbol: _quote())
     monkeypatch.setattr(ai_engine, "technical_snapshot", lambda symbol: _technical())

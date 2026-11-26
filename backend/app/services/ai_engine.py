@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 from collections import defaultdict
+from datetime import date, datetime, timedelta
+from math import isfinite
 from typing import Iterable
 
 from app.models.schemas import (
@@ -21,6 +23,7 @@ from app.services.market_data import (
     is_verified_quote_source,
     is_verified_history_source,
 )
+from app.services.market_clock import NY_TZ, latest_completed_session, now_et
 from app.services.risk import (
     bid_ask_spread_pct,
     planned_loss_per_contract,
@@ -60,7 +63,9 @@ def _best_single_contract(
         for contract in chain
         if contract.contract_type.upper() == direction.upper()
         and contract.bid > 0
-        and contract.ask > 0
+        and contract.ask >= contract.bid
+        and isfinite(contract.ask)
+        and isfinite(contract.strike)
         and contract.strike > 0
         and 0.22 <= abs(float(contract.delta or 0)) <= 0.65
     ]
@@ -86,10 +91,10 @@ def _best_single_contract(
 
 def _spread_quote(long_contract, short_contract) -> tuple[float, float, float]:
     # Conservative market for a debit spread: pay long ask, receive short bid.
-    natural_ask = max(0.01, float(long_contract.ask) - float(short_contract.bid))
-    natural_bid = max(0.0, float(long_contract.bid) - float(short_contract.ask))
-    midpoint = round(max(0.01, (natural_bid + natural_ask) / 2), 2)
-    return round(natural_bid, 2), midpoint, round(natural_ask, 2)
+    natural_ask = float(long_contract.ask) - float(short_contract.bid)
+    natural_bid = float(long_contract.bid) - float(short_contract.ask)
+    midpoint = round((natural_bid + natural_ask) / 2, 2)
+    return round(max(0, natural_bid), 2), midpoint, round(natural_ask, 2)
 
 
 def _best_debit_spread(
@@ -103,7 +108,9 @@ def _best_debit_spread(
         for contract in chain
         if contract.contract_type.upper() == direction.upper()
         and contract.bid > 0
-        and contract.ask > 0
+        and contract.ask >= contract.bid
+        and isfinite(contract.ask)
+        and isfinite(contract.strike)
         and contract.strike > 0
         and contract.expiration
     ]
@@ -133,7 +140,7 @@ def _best_debit_spread(
                     continue
 
                 spread_bid, net_debit, spread_ask = _spread_quote(long_contract, short_contract)
-                if net_debit <= 0 or net_debit >= width:
+                if not 0 < net_debit < width or round(width - net_debit, 2) < 0.03:
                     continue
 
                 quantity = spread_contracts(account_value, net_debit, max_risk_percent)
@@ -240,6 +247,10 @@ def _score_expiration_quality(quote, contract, entry_price: float, direction: st
     abs_delta = abs(metrics["directional_delta"] or 0)
 
     quality = 100
+    if metrics["expected_move_percent"] <= 0:
+        failures.append("Positive implied volatility is required to evaluate the move to break-even.")
+        quality -= 45
+
     if dte <= 21 and otm > 4.0:
         failures.append(f"The selected option is {otm:.1f}% out of the money with only {dte} DTE; short-dated far-OTM contracts are blocked.")
         quality -= 45
@@ -320,11 +331,40 @@ def _no_trade(
     )
 
 
-def _data_quality_no_trade(req: AnalyzeRequest, symbol: str, quote) -> Recommendation:
+def _quote_data_issue(quote, now: datetime) -> str | None:
+    if not quote.as_of:
+        return "The provider did not supply a quote timestamp."
+    try:
+        as_of = datetime.fromisoformat(quote.as_of)
+    except ValueError:
+        return "The provider supplied an invalid quote timestamp."
+    if as_of.tzinfo is None:
+        as_of = as_of.replace(tzinfo=NY_TZ)
+    as_of = as_of.astimezone(NY_TZ)
+    if as_of > now:
+        return "The provider supplied a future quote timestamp."
+    if quote.currency and quote.currency != "USD":
+        return f"The quote is denominated in {quote.currency}. USD account-risk sizing is unavailable for this quote."
+    completed_session = latest_completed_session(now)
+    if completed_session is None or as_of.date() < completed_session:
+        return "The quote predates the latest completed regular trading session."
+    if (
+        quote.market_status == "OPEN"
+        and quote.data_source != "stooq_eod"
+        and now - as_of > timedelta(minutes=30)
+    ):
+        return "The quote is more than 30 minutes old during the regular session."
+    return None
+
+
+def _data_quality_no_trade(req: AnalyzeRequest, symbol: str, quote, issue: str | None = None) -> Recommendation:
     threshold = req.min_confidence
     provider_issue = quote.data_source == "provider_unavailable"
     invalid_format = quote.data_source == "invalid_symbol"
-    if provider_issue:
+    if issue:
+        explanation = issue
+        risk = "Refresh the quote before evaluating a trade."
+    elif provider_issue:
         explanation = (
             f"The market-data provider could not return a verified quote for {symbol}. "
             "This is a temporary provider or rate-limit condition and does not mean the ticker is nonexistent."
@@ -379,7 +419,7 @@ def _equity_recommendation(
     *,
     auto_fallback: bool,
 ) -> Recommendation:
-    """Produce a defined-risk stock setup only when Stock or Auto mode permits it."""
+    """Produce a stock setup sized to a planned stop only when Stock or Auto mode permits it."""
     market_score, market_evidence, market_failures = score_market(market, direction)
     all_evidence.extend(market_evidence)
     hard_failures.extend(market_failures)
@@ -404,7 +444,7 @@ def _equity_recommendation(
         weight=0,
         passed=not auto_fallback,
         explanation=(
-            "Auto mode permitted a defined-risk stock setup because no verified option chain was available. "
+            "Auto mode permitted a stock setup sized to a planned stop because no verified option chain was available. "
             "No option contract was invented."
             if auto_fallback
             else "Stock mode was explicitly selected. The engine evaluated shares only and did not require or use an option chain."
@@ -445,7 +485,7 @@ def _equity_recommendation(
         threshold=req.min_confidence,
     )
     if confidence < req.min_confidence:
-        hard_failures.append(f"Confidence {confidence}% is below the configured {req.min_confidence}% threshold.")
+        hard_failures.append(f"Evidence score {confidence}/100 is below the configured threshold of {req.min_confidence}/100.")
 
     is_bullish = direction == "CALL"
     recommendation = "BUY" if is_bullish else "SHORT"
@@ -455,6 +495,13 @@ def _equity_recommendation(
         if is_bullish
         else [round(entry - stop_distance * 1.5, 2), round(entry - stop_distance * 2.5, 2)]
     )
+    limit_price = round(entry, 2)
+    if is_bullish:
+        valid_levels = 0 < stop_loss < limit_price < targets[0] < targets[1]
+    else:
+        valid_levels = 0 < targets[1] < targets[0] < limit_price < stop_loss
+    if not valid_levels:
+        hard_failures.append("The calculated stock entry, stop, and targets do not form a valid exit plan.")
     raw_data.update({
         "selected_strategy": "auto_equity_fallback" if auto_fallback else "stock_only",
         "planned_risk_dollars": planned_risk,
@@ -484,7 +531,7 @@ def _equity_recommendation(
         price_basis=(
             "Latest completed daily price; verify a current quote before entry"
             if quote.data_source == "stooq_eod"
-            else "Latest verified provider quote"
+            else "Latest timestamped provider quote; verify a current quote before entry"
         ),
     )
     return Recommendation(
@@ -499,7 +546,7 @@ def _equity_recommendation(
         profit_targets=targets,
         position_size=quantity,
         max_risk_dollars=planned_risk,
-        risk_level="Defined by stop and position size",
+        risk_level="Estimated at planned stop",
         expected_holding_period="2-15 trading days",
         explanation=(
             "A stock setup qualifies from verified technical, market-context, and risk evidence. "
@@ -584,15 +631,29 @@ def analyze_trade(req: AnalyzeRequest) -> Recommendation:
     symbol = normalize_symbol(req.symbol)
     threshold = req.min_confidence
     quote = get_quote(symbol)
-    if not is_verified_quote_source(quote.data_source) or quote.price <= 0:
+    if not is_verified_quote_source(quote.data_source) or not isfinite(quote.price) or quote.price <= 0:
         return _data_quality_no_trade(req, symbol, quote)
+
+    now = now_et()
+    issue = _quote_data_issue(quote, now)
+    if issue:
+        return _data_quality_no_trade(req, symbol, quote, issue)
 
     asset_mode = req.asset_mode.lower()
     option_structure = req.option_structure.lower()
     tech = technical_snapshot(symbol)
     market = market_context_snapshot()
     # Stock mode never requests an option chain. Options and Auto request it once.
-    chain = get_option_chain(symbol) if asset_mode in {"options", "auto"} else []
+    provider_chain = get_option_chain(symbol) if asset_mode in {"options", "auto"} else []
+    chain = []
+    for contract in provider_chain:
+        try:
+            expiration = date.fromisoformat(contract.expiration or "")
+        except ValueError:
+            continue
+        dte = (expiration - now.date()).days
+        if dte > 0:
+            chain.append(contract.model_copy(update={"days_to_expiration": dte}))
     social = social_intelligence_snapshot(symbol)
     verified_strategy = verified_strategy_intelligence_snapshot(symbol)
     raw_data = {
@@ -684,6 +745,10 @@ def analyze_trade(req: AnalyzeRequest) -> Recommendation:
         direction = "PUT"
     else:
         direction = inferred_direction
+
+    if direction != inferred_direction:
+        hard_failures.append(f"Technical evidence does not confirm the requested {direction} direction.")
+        technical_score = 0
 
     verified_strategy_adjustment, verified_strategy_note = verified_strategy_alignment_adjustment(verified_strategy, direction)
     raw_data["verified_strategy_adjustment"] = verified_strategy_adjustment
@@ -968,7 +1033,7 @@ def analyze_trade(req: AnalyzeRequest) -> Recommendation:
     if not is_verified_quote_source(quote.data_source) or not is_verified_history_source(tech.get("data_source")) or not (is_verified_history_source(market.get("data_source")) or market.get("data_source") == "mixed_verified_providers"):
         hard_failures.append("Verified market data was not available for every required evidence category.")
     if confidence < threshold:
-        hard_failures.append(f"Confidence {confidence}% is below the configured {threshold}% threshold.")
+        hard_failures.append(f"Evidence score {confidence}/100 is below the configured threshold of {threshold}/100.")
 
     raw_data.update({
         "selected_strategy": selected_strategy,
@@ -1033,8 +1098,8 @@ def analyze_trade(req: AnalyzeRequest) -> Recommendation:
         stop_loss = round(entry_price * 0.70, 2)
         max_value = width
         targets = [
-            round(min(max_value * 0.90, entry_price + (max_value - entry_price) * 0.35), 2),
-            round(min(max_value * 0.95, entry_price + (max_value - entry_price) * 0.60), 2),
+            round(entry_price + (max_value - entry_price) * 0.35, 2),
+            round(entry_price + (max_value - entry_price) * 0.60, 2),
         ]
         legs = [
             SuggestedOptionsLeg(
@@ -1140,7 +1205,7 @@ def analyze_trade(req: AnalyzeRequest) -> Recommendation:
 
 def generate_recommendations(req: RecommendationsRequest):
     results = []
-    unique_symbols = list(dict.fromkeys(normalize_symbol(symbol) for symbol in req.symbols if symbol.strip()))[:20]
+    unique_symbols = list(dict.fromkeys(filter(None, map(normalize_symbol, req.symbols))))[:20]
     for symbol in unique_symbols:
         recommendation = analyze_trade(AnalyzeRequest(
             symbol=symbol,

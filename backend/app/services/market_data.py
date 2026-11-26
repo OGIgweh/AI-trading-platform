@@ -254,7 +254,8 @@ def _fast_info_to_quote(symbol: str, ticker: Any) -> Quote | None:
             volume=volume,
             market_status=_market_status(),
             data_source="yfinance_delayed",
-            as_of=datetime.now().astimezone().isoformat(),
+            as_of=None,
+            currency=getter("currency"),
             previous_close=round(previous, 2),
             day_low=round(_safe_float(getter("day_low"), price), 2),
             day_high=round(_safe_float(getter("day_high"), price), 2),
@@ -274,7 +275,7 @@ def _info_to_quote(symbol: str, ticker: Any) -> Quote | None:
         volume = _safe_int(info.get("regularMarketVolume") or info.get("volume"), 0)
         change = price - previous
         timestamp = info.get("regularMarketTime")
-        as_of = datetime.fromtimestamp(timestamp).astimezone().isoformat() if timestamp else datetime.now().astimezone().isoformat()
+        as_of = datetime.fromtimestamp(timestamp).astimezone().isoformat() if timestamp else None
         return Quote(
             symbol=symbol,
             price=round(price, 2),
@@ -284,6 +285,7 @@ def _info_to_quote(symbol: str, ticker: Any) -> Quote | None:
             market_status=_market_status(),
             data_source="yfinance_delayed",
             as_of=as_of,
+            currency=info.get("currency"),
             previous_close=round(previous, 2),
             day_low=round(_safe_float(info.get("regularMarketDayLow") or info.get("dayLow"), price), 2),
             day_high=round(_safe_float(info.get("regularMarketDayHigh") or info.get("dayHigh"), price), 2),

@@ -97,9 +97,9 @@ def fetch_tradier_quote(symbol: str) -> Quote | None:
             # Tradier trade_date is generally epoch milliseconds.
             as_of = datetime.fromtimestamp(float(trade_date) / 1000, tz=timezone.utc).astimezone().isoformat()
         except Exception:
-            as_of = datetime.now().astimezone().isoformat()
+            as_of = None
     else:
-        as_of = datetime.now().astimezone().isoformat()
+        as_of = None
 
     source = "tradier_delayed" if settings.tradier_sandbox else "tradier_realtime"
     return Quote(
@@ -111,6 +111,7 @@ def fetch_tradier_quote(symbol: str) -> Quote | None:
         market_status=market_status(),
         data_source=source,
         as_of=as_of,
+        currency="USD",
         previous_close=round(previous, 2),
         day_low=round(_safe_float(quote.get("low"), price), 2),
         day_high=round(_safe_float(quote.get("high"), price), 2),
@@ -320,6 +321,7 @@ def _yahoo_chart_payload_to_frame(payload: dict[str, Any], source: str = "yahoo_
         frame.attrs["data_source"] = source
         meta = result.get("meta") or {}
         frame.attrs["currency"] = meta.get("currency")
+        frame.attrs["regular_market_time"] = meta.get("regularMarketTime")
         frame.attrs["exchange_timezone"] = meta.get("exchangeTimezoneName")
         return frame
     except Exception:
@@ -462,6 +464,14 @@ def quote_from_history(symbol: str, frame: pd.DataFrame, source: str) -> Quote |
     change = price - previous
     as_of_value = clean.index[-1]
     as_of = as_of_value.isoformat() if hasattr(as_of_value, "isoformat") else str(as_of_value)
+    market_time = frame.attrs.get("regular_market_time")
+    if source == "yahoo_chart_delayed" and market_time and isinstance(as_of_value, datetime):
+        try:
+            trade_time = datetime.fromtimestamp(float(market_time), tz=timezone.utc)
+            if trade_time.date() == as_of_value.date() and trade_time >= as_of_value:
+                as_of = trade_time.isoformat()
+        except (ValueError, TypeError, OverflowError, OSError):
+            pass
     year = clean.tail(260)
     return Quote(
         symbol=symbol,
@@ -472,6 +482,7 @@ def quote_from_history(symbol: str, frame: pd.DataFrame, source: str) -> Quote |
         market_status=market_status(),
         data_source=source,
         as_of=as_of,
+        currency=frame.attrs.get("currency") or ("USD" if source == "stooq_eod" else None),
         previous_close=round(previous, 2),
         day_low=round(_safe_float(last.get("Low"), price), 2),
         day_high=round(_safe_float(last.get("High"), price), 2),

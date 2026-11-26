@@ -3,7 +3,7 @@ import { SafeAreaView, View, Text, TextInput, TouchableOpacity, ScrollView, Styl
 import * as LocalAuthentication from 'expo-local-authentication';
 import Constants from 'expo-constants';
 
-const API = Constants.expoConfig?.extra?.apiUrl || 'https://ai-trading-platform-vdm6.onrender.com/api';
+const API = process.env.EXPO_PUBLIC_API_URL || Constants.expoConfig?.extra?.apiUrl || 'https://ai-trading-platform-vdm6.onrender.com/api';
 
 async function apiError(response) {
   try {
@@ -112,6 +112,7 @@ export default function App() {
       setLoading(true);
       setError('');
       const clean = requestedSymbol.trim().toUpperCase();
+      setRec(null);
       setSymbol(clean);
       setSearchResults([]);
       setRec(await postAnalyze(clean, assetMode, optionStructure));
@@ -159,7 +160,7 @@ export default function App() {
         <Text style={styles.muted}>Paper mode · live trading locked · capital preservation first</Text>
         {error ? <Text style={styles.error}>Error: {error}</Text> : null}
         <View style={styles.grid}>
-          <View style={styles.card}><Text style={styles.label}>Portfolio</Text><Text style={styles.big}>${portfolio?.total_value?.toLocaleString() || '10,000'}</Text><Text style={styles.muted}>Daily P/L ${portfolio?.daily_pl ?? '—'}</Text></View>
+          <View style={styles.card}><Text style={styles.label}>Demo Portfolio</Text><Text style={styles.big}>{portfolio ? `$${portfolio.total_value.toLocaleString()}` : 'Unavailable'}</Text><Text style={styles.muted}>Daily P/L ${portfolio?.daily_pl ?? '—'}</Text></View>
           <View style={styles.card}><Text style={styles.label}>Market</Text><Text style={styles.big}>{portfolio?.market_status || '—'}</Text><Text style={styles.muted}>{portfolio?.market_sentiment || 'Neutral'}</Text></View>
         </View>
         <View style={styles.card}>
@@ -183,6 +184,7 @@ export default function App() {
                 const exact = searchResults.find((item) => item.symbol === symbol.trim().toUpperCase());
                 analyze(exact?.symbol || searchResults[0]?.symbol || symbol);
               }}
+              disabled={loading}
               style={styles.btn}
             ><Text style={styles.btnText}>Analyze</Text></TouchableOpacity>
           </View>
@@ -192,7 +194,8 @@ export default function App() {
               <TouchableOpacity
                 key={value}
                 style={[styles.modeButton, assetMode === value && styles.modeButtonActive]}
-                onPress={() => setAssetMode(value)}
+                disabled={loading}
+                onPress={() => { setAssetMode(value); setRec(null); }}
               >
                 <Text style={[styles.modeButtonText, assetMode === value && styles.modeButtonTextActive]}>{label}</Text>
               </TouchableOpacity>
@@ -213,6 +216,7 @@ export default function App() {
                   <TouchableOpacity
                     key={value}
                     style={[styles.modeButton, optionStructure === value && styles.modeButtonActive]}
+                    disabled={loading}
                     onPress={() => { setOptionStructure(value); setRec(null); }}
                   >
                     <Text style={[styles.modeButtonText, optionStructure === value && styles.modeButtonTextActive]}>{label}</Text>
@@ -232,7 +236,7 @@ export default function App() {
           {searchResults.length > 0 ? (
             <View style={styles.searchResults}>
               {searchResults.map((item) => (
-                <TouchableOpacity key={`${item.symbol}-${item.exchange}`} style={styles.searchResult} onPress={() => analyze(item.symbol)}>
+                <TouchableOpacity key={`${item.symbol}-${item.exchange}`} style={styles.searchResult} disabled={loading} onPress={() => analyze(item.symbol)}>
                   <Text style={styles.searchSymbol}>{item.symbol}</Text>
                   <View style={{ flex: 1 }}>
                     <Text numberOfLines={1} style={styles.searchName}>{item.name}</Text>
@@ -245,7 +249,7 @@ export default function App() {
           {loading ? <ActivityIndicator style={{ marginTop: 20 }} /> : null}
           {rec && <View style={rec.recommendation === 'NO_TRADE' ? styles.noTrade : styles.trade}>
             <Text style={styles.result}>{rec.recommendation === 'NO_TRADE' ? 'NO TRADE RECOMMENDED' : `${rec.recommendation} SETUP`}</Text>
-            <Text style={styles.text}>Confidence {rec.confidence}% / {rec.threshold}%</Text>
+            <Text style={styles.text}>Evidence score {rec.confidence}/100 · Threshold {rec.threshold}/100</Text>
             <Text style={styles.text}>{rec.explanation}</Text>
             {rec.risks?.map((r, i) => <Text key={i} style={styles.text}>• {r}</Text>)}
           </View>}
@@ -283,7 +287,7 @@ export default function App() {
             </>
           )}
         </View>
-        <View style={styles.card}><Text style={styles.label}>Risk Center</Text><Text style={styles.text}>Max risk per trade: 1%</Text><Text style={styles.text}>Emergency stop: ready</Text><Text style={styles.text}>Broker execution: disabled</Text></View>
+        <View style={styles.card}><Text style={styles.label}>Risk Center</Text><Text style={styles.text}>Max risk per trade: 1%</Text><Text style={styles.text}>Broker execution: disabled</Text></View>
       </ScrollView>
     </SafeAreaView>
   );

@@ -1,3 +1,5 @@
+from datetime import timedelta
+
 from app.models.schemas import AnalyzeRequest, OptionContract, Quote
 from app.services import ai_engine
 
@@ -11,6 +13,7 @@ def _quote():
         volume=20_000_000,
         market_status="OPEN",
         data_source="yfinance_delayed",
+        as_of=ai_engine.now_et().isoformat(),
     )
 
 
@@ -57,7 +60,7 @@ def _contract(symbol, strike, bid, ask, delta, volume=1000, oi=5000):
         theta=0.0,
         vega=0.0,
         spread_percent=1.0,
-        expiration="2026-08-21",
+        expiration=(ai_engine.now_et().date() + timedelta(days=29)).isoformat(),
         days_to_expiration=29,
     )
 

@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { createRoot } from 'react-dom/client';
 import {
   LineChart,
@@ -105,7 +105,7 @@ function RecommendationCard({ r, onSelect }) {
         <span style={{ width: `${r.confidence}%` }} />
       </div>
       <p>
-        <strong>{r.confidence}%</strong> confidence · {r.trade_type || 'analysis'} · {r.risk_level}
+        <strong>{r.confidence}/100</strong> evidence score · {r.trade_type || 'analysis'} · {r.risk_level}
       </p>
       {order ? (
         <div className="compactOrder">
@@ -185,38 +185,6 @@ function ScoreBreakdown({ score }) {
   );
 }
 
-function fallbackOrder(rec, currentQuote) {
-  if (rec?.suggested_order) return rec.suggested_order;
-  const contract = rec?.raw_data?.selected_contract;
-  if (!contract || !rec?.entry_price || rec?.recommendation === 'NO_TRADE') return null;
-  const quantity = rec.position_size || 1;
-  const mid = Number(rec.entry_price);
-  return {
-    strategy: rec.recommendation === 'CALL' ? 'Call' : 'Put',
-    underlying_symbol: rec.symbol,
-    underlying_price: currentQuote?.price || rec.raw_data?.quote?.price,
-    action: 'BUY_TO_OPEN',
-    quantity,
-    expiration: contract.expiration || 'Unavailable',
-    days_to_expiration: contract.days_to_expiration,
-    strike: contract.strike,
-    option_type: rec.recommendation,
-    contract_symbol: contract.symbol,
-    bid: contract.bid,
-    mid,
-    ask: contract.ask,
-    order_type: 'LIMIT',
-    limit_price: mid,
-    timing: 'DAY',
-    special_instructions: 'NONE',
-    estimated_amount: quantity * mid * 100,
-    estimated_max_loss: quantity * mid * 100,
-    price_basis: 'Midpoint of current bid/ask',
-    review_required: true,
-    live_submission_enabled: false,
-  };
-}
-
 function TicketRow({ label, value, help, copyValue, onCopy, copied }) {
   return (
     <div className="ticketRow">
@@ -241,9 +209,9 @@ function TicketRow({ label, value, help, copyValue, onCopy, copied }) {
   );
 }
 
-function SuggestedOrderTicket({ rec, currentQuote }) {
+function SuggestedOrderTicket({ rec }) {
   const [copied, setCopied] = useState('');
-  const order = useMemo(() => fallbackOrder(rec, currentQuote), [rec, currentQuote]);
+  const order = rec?.suggested_order;
 
   async function copyValue(value, label) {
     try {
@@ -275,14 +243,14 @@ function SuggestedOrderTicket({ rec, currentQuote }) {
           <div>
             <span className="eyebrow">BROKER ENTRY FORMAT</span>
             <h3>Suggested Stock Order</h3>
-            <p>Generated because verified stock data qualified but a verified options chain was unavailable.</p>
+            <p>Sized using the account settings and planned stop. Losses can exceed the planned amount.</p>
           </div>
           <span className="paperOnlyBadge">Review required</span>
         </div>
         <div className="underlyingStrip">
           <div><span>Symbol</span><strong>{equityOrder.symbol}</strong></div>
           <div><span>Strategy</span><strong>{equityOrder.strategy}</strong></div>
-          <div><span>Market price</span><strong>{money(currentQuote?.price || equityOrder.limit_price)}</strong></div>
+          <div><span>Market price</span><strong>{money(rec.raw_data?.quote?.price || equityOrder.limit_price)}</strong></div>
           <div><span>Holding period</span><strong>{rec.expected_holding_period}</strong></div>
         </div>
         <div className="orderSettings">
@@ -594,6 +562,7 @@ function App() {
     }
   });
   const [rec, setRec] = useState(null);
+  const analysisRunning = useRef(false);
   const [currentQuote, setCurrentQuote] = useState(null);
   const [chain, setChain] = useState([]);
   const [chartData, setChartData] = useState(null);
@@ -712,18 +681,7 @@ function App() {
   }
 
   async function refreshAll() {
-    setLoading(true);
-    setError('');
-    try {
-      // Refresh only the selected ticker. Automatically analyzing every saved
-      // symbol on page load can trigger free-provider rate limits and make
-      // valid tickers appear unavailable.
-      await run(searchTerm || symbol || DEFAULT_SYMBOLS[0], false);
-    } catch (err) {
-      setError(err.message || 'Unable to refresh the current analysis.');
-    } finally {
-      setLoading(false);
-    }
+    await run(searchTerm || symbol || DEFAULT_SYMBOLS[0]);
   }
 
   function rememberSymbol(clean) {
@@ -750,10 +708,12 @@ function App() {
     }
   }
 
-  async function run(requestedSymbol = searchTerm || symbol, manageLoading = true) {
+  async function run(requestedSymbol = searchTerm || symbol) {
     const clean = String(requestedSymbol || '').toUpperCase().trim();
-    if (!clean) return;
-    if (manageLoading) setLoading(true);
+    if (!clean || analysisRunning.current) return;
+    analysisRunning.current = true;
+    setLoading(true);
+    setRec(null);
     setSymbol(clean);
     setSearchTerm(clean);
     setSearchOpen(false);
@@ -795,7 +755,8 @@ function App() {
       setRec(null);
       setError(err.message || `Unable to analyze ${clean}.`);
     } finally {
-      if (manageLoading) setLoading(false);
+      analysisRunning.current = false;
+      setLoading(false);
     }
   }
 
@@ -805,20 +766,9 @@ function App() {
     run(result.symbol);
   }
 
-  function changeAnalysisMode(nextMode) {
-    setAnalysisSettings((previous) => ({ ...previous, analysisMode: nextMode }));
-    // Clear mode-dependent results so an options result is never mistaken for
-    // a stock/auto result (or vice versa) after the selector changes.
-    setRec(null);
-    setRecs([]);
-    setChain([]);
-    setError('');
-  }
-
-  function changeOptionStructure(nextStructure) {
-    setAnalysisSettings((previous) => ({ ...previous, optionStructure: nextStructure }));
-    // Clear the old ticket so a single-leg recommendation cannot remain visible
-    // after switching to Multi Leg (or vice versa).
+  function changeAnalysisSetting(name, value) {
+    if (analysisRunning.current) return;
+    setAnalysisSettings((previous) => ({ ...previous, [name]: value }));
     setRec(null);
     setRecs([]);
     setChain([]);
@@ -883,18 +833,18 @@ function App() {
       {error && <div className="errorBanner"><AlertTriangle size={18} />{error}</div>}
 
       <section className="grid metrics">
-        <Card title="Portfolio Value" icon={<TrendingUp />}>
+        <Card title="Demo Portfolio Value" icon={<TrendingUp />}>
           <b>{money(portfolio?.total_value)}</b>
-          <span>Daily P/L {money(portfolio?.daily_pl || 0)}</span>
+          <span>Daily P/L {money(portfolio?.daily_pl)}</span>
         </Card>
-        <Card title="Buying Power" icon={<ShieldCheck />}>
+        <Card title="Demo Buying Power" icon={<ShieldCheck />}>
           <b>{money(portfolio?.buying_power)}</b>
           <span>Open positions {portfolio?.open_positions || 0}</span>
         </Card>
-        <Card title="AI Confidence" icon={<Brain />}>
-          <b>{rec ? `${rec.confidence}%` : '—'}</b>
+        <Card title="Evidence Score" icon={<Brain />}>
+          <b>{rec ? `${rec.confidence}/100` : '—'}</b>
           <span>{rec ? `${rec.symbol} · ${rec.recommendation === 'NO_TRADE' ? 'No trade' : rec.recommendation}` : 'Run an analysis'}</span>
-          <small className="confidenceClarifier">Evidence alignment · not probability of profit</small>
+          <small className="confidenceClarifier">Heuristic evidence alignment</small>
         </Card>
         <Card title="Risk Mode" icon={<AlertTriangle />}>
           <b>Capital First</b>
@@ -1061,7 +1011,8 @@ function App() {
                   role="radio"
                   aria-checked={analysisSettings.analysisMode === mode.value}
                   className={analysisSettings.analysisMode === mode.value ? 'active' : ''}
-                  onClick={() => changeAnalysisMode(mode.value)}
+                  disabled={loading}
+                  onClick={() => changeAnalysisSetting('analysisMode', mode.value)}
                 >
                   <b>{mode.label}</b>
                   <small>{mode.description}</small>
@@ -1073,7 +1024,7 @@ function App() {
                 ? 'Options mode is strict: if a verified option chain is unavailable, the result is NO TRADE—not a stock buy or short.'
                 : analysisSettings.analysisMode === 'stock'
                   ? 'Stock mode analyzes shares only and will not generate Call, Put, Vertical Call, or Vertical Put tickets.'
-                  : 'Auto mode evaluates options first and may produce a defined-risk stock setup only when verified options data is unavailable.'}
+                  : 'Auto mode evaluates options first and may produce a stock setup sized to a planned stop only when verified options data is unavailable.'}
             </p>
           </div>
 
@@ -1098,7 +1049,8 @@ function App() {
                     role="radio"
                     aria-checked={analysisSettings.optionStructure === structure.value}
                     className={analysisSettings.optionStructure === structure.value ? 'active' : ''}
-                    onClick={() => changeOptionStructure(structure.value)}
+                    disabled={loading}
+                    onClick={() => changeAnalysisSetting('optionStructure', structure.value)}
                   >
                     <b>{structure.label}</b>
                     <small>{structure.description}</small>
@@ -1123,20 +1075,16 @@ function App() {
                 min="1000"
                 step="1000"
                 value={analysisSettings.accountValue}
-                onChange={(event) => setAnalysisSettings((previous) => ({
-                  ...previous,
-                  accountValue: Math.max(1000, Number(event.target.value) || 1000),
-                }))}
+                disabled={loading}
+                onChange={(event) => changeAnalysisSetting('accountValue', Math.max(1000, Number(event.target.value) || 1000))}
               />
             </label>
             <label>
               <span>Risk per trade</span>
               <select
                 value={analysisSettings.maxRiskPercent}
-                onChange={(event) => setAnalysisSettings((previous) => ({
-                  ...previous,
-                  maxRiskPercent: Number(event.target.value),
-                }))}
+                disabled={loading}
+                onChange={(event) => changeAnalysisSetting('maxRiskPercent', Number(event.target.value))}
               >
                 <option value="0.5">0.5%</option>
                 <option value="1">1%</option>
@@ -1146,19 +1094,17 @@ function App() {
               </select>
             </label>
             <label>
-              <span>Minimum confidence</span>
+              <span>Minimum evidence score</span>
               <select
                 value={analysisSettings.minConfidence}
-                onChange={(event) => setAnalysisSettings((previous) => ({
-                  ...previous,
-                  minConfidence: Number(event.target.value),
-                }))}
+                disabled={loading}
+                onChange={(event) => changeAnalysisSetting('minConfidence', Number(event.target.value))}
               >
-                <option value="65">65%</option>
-                <option value="70">70%</option>
-                <option value="75">75%</option>
-                <option value="80">80%</option>
-                <option value="85">85%</option>
+                <option value="65">65/100</option>
+                <option value="70">70/100</option>
+                <option value="75">75/100</option>
+                <option value="80">80/100</option>
+                <option value="85">85/100</option>
               </select>
             </label>
             <div className="riskBudgetSummary">
@@ -1183,7 +1129,7 @@ function App() {
               </div>
               <div className="quoteFacts">
                 <span><small>Status</small><b>{currentQuote.market_status}</b></span>
-                <span><small>As of</small><b>{formatAsOf(currentQuote.as_of || chartData?.as_of)}</b></span>
+                <span><small>As of</small><b>{formatAsOf(currentQuote.as_of)}</b></span>
                 <span><small>Previous close</small><b>{hasVerifiedQuote(currentQuote) ? money(currentQuote.previous_close) : 'Unavailable'}</b></span>
                 <span><small>Day range</small><b>{hasVerifiedQuote(currentQuote) ? `${money(currentQuote.day_low)} – ${money(currentQuote.day_high)}` : 'Unavailable'}</b></span>
                 <span><small>Volume</small><b>{hasVerifiedQuote(currentQuote) ? currentQuote.volume?.toLocaleString() : 'Unavailable'}</b></span>
@@ -1213,9 +1159,9 @@ function App() {
                   </h2>
                 </div>
                 <div className="confidenceBadge">
-                  <strong>{rec.confidence}%</strong>
+                  <strong>{rec.confidence}/100</strong>
                   <small>Evidence alignment</small>
-                  <small>Threshold {rec.threshold}% · not win probability</small>
+                  <small>Threshold {rec.threshold}/100</small>
                 </div>
               </div>
 
@@ -1230,7 +1176,7 @@ function App() {
                 <span>Options contracts: {rec.raw_data?.options_contract_count ?? 0}</span>
                 <span>Quote source: {currentQuote?.data_source || rec.raw_data?.quote?.data_source || 'unavailable'}</span>
               </div>
-              <SuggestedOrderTicket rec={rec} currentQuote={currentQuote} />
+              <SuggestedOrderTicket rec={rec} />
 
               {rec.risks?.length > 0 && (
                 <details className="analysisDetails">
