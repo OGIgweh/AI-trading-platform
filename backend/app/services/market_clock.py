@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime, timezone, time
+from datetime import datetime, timezone, time, timedelta
 from functools import lru_cache
 from zoneinfo import ZoneInfo
 
@@ -41,7 +41,7 @@ def _calendar_status_for_minute(minute_bucket: str) -> tuple[str, str]:
             return "CLOSED", "NYSE calendar: no regular trading session today."
         market_open = schedule.iloc[0]["market_open"].to_pydatetime().astimezone(NY_TZ)
         market_close = schedule.iloc[0]["market_close"].to_pydatetime().astimezone(NY_TZ)
-        if market_open <= now <= market_close:
+        if market_open <= now < market_close:
             return "OPEN", f"NYSE regular session open until {market_close.strftime('%-I:%M %p %Z')}."
         if now < market_open:
             return "CLOSED", f"NYSE regular session opens at {market_open.strftime('%-I:%M %p %Z')}."
@@ -59,7 +59,7 @@ def _fallback_status(now: datetime) -> tuple[str, str]:
     open_t = time(9, 30)
     close_t = _EARLY_CLOSES.get(date_key, time(16, 0))
     current_t = now.time()
-    if open_t <= current_t <= close_t:
+    if open_t <= current_t < close_t:
         return "OPEN", f"Fallback NYSE regular session window {open_t.strftime('%I:%M %p')}–{close_t.strftime('%I:%M %p')} ET."
     if current_t < open_t:
         return "CLOSED", "Before NYSE regular session."
@@ -83,3 +83,18 @@ def market_status_detail() -> dict:
         "checked_at_et": now.isoformat(),
         "session": "NYSE regular session",
     }
+
+
+@lru_cache(maxsize=16)
+def _recent_nyse_sessions(day):
+    import pandas_market_calendars as mcal
+
+    return mcal.get_calendar("NYSE").schedule(
+        start_date=day - timedelta(days=14), end_date=day
+    )
+
+
+def latest_completed_session(now: datetime):
+    schedule = _recent_nyse_sessions(now.date())
+    completed = schedule.loc[schedule["market_close"] <= now]
+    return completed.index[-1].date() if not completed.empty else None

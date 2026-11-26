@@ -2,7 +2,7 @@ from __future__ import annotations
 
 
 def bid_ask_spread_pct(bid: float, ask: float) -> float:
-    if ask <= 0 or bid <= 0:
+    if bid <= 0 or ask < bid:
         return 100.0
     mid = (ask + bid) / 2
     return round(((ask - bid) / mid) * 100, 2)

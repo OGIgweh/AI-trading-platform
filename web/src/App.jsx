@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { createRoot } from 'react-dom/client';
 import {
   LineChart,
@@ -28,6 +28,8 @@ import {
   options,
   history,
   searchStocks,
+  socialIntelligence,
+  verifiedStrategyIntelligence,
 } from './lib/api';
 import './style.css';
 
@@ -103,7 +105,7 @@ function RecommendationCard({ r, onSelect }) {
         <span style={{ width: `${r.confidence}%` }} />
       </div>
       <p>
-        <strong>{r.confidence}%</strong> confidence · {r.trade_type || 'analysis'} · {r.risk_level}
+        <strong>{r.confidence}/100</strong> evidence score · {r.trade_type || 'analysis'} · {r.risk_level}
       </p>
       {order ? (
         <div className="compactOrder">
@@ -176,42 +178,11 @@ function ScoreBreakdown({ score }) {
       <span>Options <b>{score.options_score}</b></span>
       <span>Market <b>{score.market_score}</b></span>
       <span>Risk <b>{score.risk_score}</b></span>
+      <span>Verified Strategy <b>{score.verified_strategy_score ?? 0}</b></span>
       <span>Final <b>{score.final_confidence}</b></span>
       <span>Threshold <b>{score.threshold}</b></span>
     </div>
   );
-}
-
-function fallbackOrder(rec, currentQuote) {
-  if (rec?.suggested_order) return rec.suggested_order;
-  const contract = rec?.raw_data?.selected_contract;
-  if (!contract || !rec?.entry_price || rec?.recommendation === 'NO_TRADE') return null;
-  const quantity = rec.position_size || 1;
-  const mid = Number(rec.entry_price);
-  return {
-    strategy: rec.recommendation === 'CALL' ? 'Call' : 'Put',
-    underlying_symbol: rec.symbol,
-    underlying_price: currentQuote?.price || rec.raw_data?.quote?.price,
-    action: 'BUY_TO_OPEN',
-    quantity,
-    expiration: contract.expiration || 'Unavailable',
-    days_to_expiration: contract.days_to_expiration,
-    strike: contract.strike,
-    option_type: rec.recommendation,
-    contract_symbol: contract.symbol,
-    bid: contract.bid,
-    mid,
-    ask: contract.ask,
-    order_type: 'LIMIT',
-    limit_price: mid,
-    timing: 'DAY',
-    special_instructions: 'NONE',
-    estimated_amount: quantity * mid * 100,
-    estimated_max_loss: quantity * mid * 100,
-    price_basis: 'Midpoint of current bid/ask',
-    review_required: true,
-    live_submission_enabled: false,
-  };
 }
 
 function TicketRow({ label, value, help, copyValue, onCopy, copied }) {
@@ -238,9 +209,9 @@ function TicketRow({ label, value, help, copyValue, onCopy, copied }) {
   );
 }
 
-function SuggestedOrderTicket({ rec, currentQuote }) {
+function SuggestedOrderTicket({ rec }) {
   const [copied, setCopied] = useState('');
-  const order = useMemo(() => fallbackOrder(rec, currentQuote), [rec, currentQuote]);
+  const order = rec?.suggested_order;
 
   async function copyValue(value, label) {
     try {
@@ -272,14 +243,14 @@ function SuggestedOrderTicket({ rec, currentQuote }) {
           <div>
             <span className="eyebrow">BROKER ENTRY FORMAT</span>
             <h3>Suggested Stock Order</h3>
-            <p>Generated because verified stock data qualified but a verified options chain was unavailable.</p>
+            <p>Sized using the account settings and planned stop. Losses can exceed the planned amount.</p>
           </div>
           <span className="paperOnlyBadge">Review required</span>
         </div>
         <div className="underlyingStrip">
           <div><span>Symbol</span><strong>{equityOrder.symbol}</strong></div>
           <div><span>Strategy</span><strong>{equityOrder.strategy}</strong></div>
-          <div><span>Market price</span><strong>{money(currentQuote?.price || equityOrder.limit_price)}</strong></div>
+          <div><span>Market price</span><strong>{money(rec.raw_data?.quote?.price || equityOrder.limit_price)}</strong></div>
           <div><span>Holding period</span><strong>{rec.expected_holding_period}</strong></div>
         </div>
         <div className="orderSettings">
@@ -480,6 +451,101 @@ function SuggestedOrderTicket({ rec, currentQuote }) {
   );
 }
 
+
+function SocialWhalePanel({ data, asset, onAssetChange, loading }) {
+  const assets = ['BTC', 'ETH', 'SOL', 'HYPE', 'ARB'];
+  const consensus = data?.consensus || 'UNAVAILABLE';
+  const traders = data?.top_traders || [];
+  return (
+    <Card title="Social / Whale Intelligence" className="socialWhaleCard">
+      <div className="socialAssetSelector" role="radiogroup" aria-label="Crypto social intelligence asset">
+        {assets.map((item) => (
+          <button
+            type="button"
+            key={item}
+            onClick={() => onAssetChange(item)}
+            className={item === asset ? 'active' : ''}
+            aria-checked={item === asset}
+            role="radio"
+          >{item}</button>
+        ))}
+      </div>
+      {loading ? <p>Loading verified social/whale data…</p> : (
+        <>
+          <div className="socialSummary">
+            <div><span>Consensus</span><strong className={consensus === 'BULLISH' ? 'positive' : consensus === 'BEARISH' ? 'negative' : ''}>{consensus}</strong></div>
+            <div><span>Directional score</span><strong>{data?.score ?? 50}/100</strong></div>
+            <div><span>Coverage confidence</span><strong>{data?.confidence ?? 0}%</strong></div>
+            <div><span>Qualified traders</span><strong>{data?.qualified_traders ?? 0}</strong></div>
+          </div>
+          <p className="socialNotice">{data?.message || 'No social/whale provider data is configured yet.'}</p>
+          <div className="providerPills">
+            {(data?.providers_used || []).length
+              ? data.providers_used.map((provider) => <span key={provider}>{provider}</span>)
+              : <span>Provider not configured</span>}
+          </div>
+          {traders.length > 0 && (
+            <div className="socialTraderList">
+              {traders.slice(0, 6).map((trader, index) => (
+                <div className="socialTrader" key={`${trader.wallet || trader.trader}-${index}`}>
+                  <div><strong>{trader.trader}</strong><span>{trader.provider}</span></div>
+                  <div><span>Direction</span><b className={trader.direction === 'LONG' ? 'positive' : trader.direction === 'SHORT' ? 'negative' : ''}>{trader.direction}</b></div>
+                  <div><span>Win rate</span><b>{Math.round(Number(trader.win_rate || 0) * 100)}%</b></div>
+                  <div><span>Closed sample</span><b>{trader.closed_trades || 0}</b></div>
+                  <div><span>Current P/L</span><b>{Number(trader.current_pnl_percent || 0).toFixed(2)}%</b></div>
+                </div>
+              ))}
+            </div>
+          )}
+          <small className="confidenceClarifier">Supplemental signal only. Win rate is weighted with sample size and active direction; it never creates a trade by itself.</small>
+        </>
+      )}
+    </Card>
+  );
+}
+
+function VerifiedStrategyPanel({ data, symbol, loading }) {
+  const strategies = data?.top_strategies || [];
+  const consensus = data?.consensus || 'N/A';
+  return (
+    <Card title="Verified Strategy Intelligence" className="verifiedStrategyCard">
+      {loading ? <p>Loading AlphaLedger strategy intelligence…</p> : (
+        <>
+          <div className="socialSummary">
+            <div><span>Selected ticker</span><strong>{symbol || '—'}</strong></div>
+            <div><span>Directional consensus</span><strong className={consensus === 'BULLISH' ? 'positive' : consensus === 'BEARISH' ? 'negative' : ''}>{consensus}</strong></div>
+            <div><span>Strategy quality</span><strong>{data?.quality_score ?? 0}/100</strong></div>
+            <div><span>Matched strategies</span><strong>{data?.matched_strategies ?? 0}</strong></div>
+          </div>
+          <p className="socialNotice">{data?.message || 'AlphaLedger authorized data is not configured yet.'}</p>
+          <div className="providerPills">
+            {(data?.providers_used || []).length
+              ? data.providers_used.map((provider) => <span key={provider}>{provider}</span>)
+              : <span>AlphaLedger adapter ready · endpoint not configured</span>}
+          </div>
+          {strategies.length > 0 && (
+            <div className="verifiedStrategyList">
+              {strategies.slice(0, 6).map((strategy, index) => (
+                <div className="verifiedStrategyRow" key={`${strategy.alphaledger_id || strategy.strategy_name}-${index}`}>
+                  <div><strong>{strategy.strategy_name}</strong><span>{strategy.provider_name}</span></div>
+                  <div><span>Alpha Score</span><b>{Number(strategy.alpha_score || 0).toFixed(0)}</b></div>
+                  <div><span>Sharpe</span><b>{Number(strategy.sharpe_ratio || 0).toFixed(2)}</b></div>
+                  <div><span>Max DD</span><b>{Number(strategy.max_drawdown_percent || 0).toFixed(1)}%</b></div>
+                  <div><span>Audit</span><b>{strategy.audit_active ? 'Active' : 'Not active'}</b></div>
+                  <div><span>Match</span><b className={strategy.matched_direction === 'LONG' ? 'positive' : strategy.matched_direction === 'SHORT' ? 'negative' : ''}>{strategy.matched_direction || 'Metrics only'}</b></div>
+                </div>
+              ))}
+            </div>
+          )}
+          <small className="confidenceClarifier">
+            AlphaLedger metrics only adjust confidence when an authorized feed reports qualified, ownership-validated strategies with current exposure to this exact ticker. Generic leaderboard performance never creates a trade signal.
+          </small>
+        </>
+      )}
+    </Card>
+  );
+}
+
 function App() {
   const [portfolio, setPortfolio] = useState(null);
   const [symbol, setSymbol] = useState('AAPL');
@@ -496,6 +562,7 @@ function App() {
     }
   });
   const [rec, setRec] = useState(null);
+  const analysisRunning = useRef(false);
   const [currentQuote, setCurrentQuote] = useState(null);
   const [chain, setChain] = useState([]);
   const [chartData, setChartData] = useState(null);
@@ -504,6 +571,11 @@ function App() {
   const [recs, setRecs] = useState([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
+  const [socialAsset, setSocialAsset] = useState('BTC');
+  const [socialData, setSocialData] = useState(null);
+  const [socialLoading, setSocialLoading] = useState(false);
+  const [verifiedStrategyData, setVerifiedStrategyData] = useState(null);
+  const [verifiedStrategyLoading, setVerifiedStrategyLoading] = useState(false);
   const [analysisSettings, setAnalysisSettings] = useState(() => {
     try {
       const saved = JSON.parse(localStorage.getItem(ANALYSIS_SETTINGS_STORAGE_KEY) || '{}');
@@ -526,6 +598,8 @@ function App() {
   useEffect(() => {
     getPortfolio().then(setPortfolio).catch(() => setError('Unable to load portfolio summary.'));
     refreshAll();
+    loadSocial('BTC');
+    loadVerifiedStrategy('AAPL');
   }, []);
 
   useEffect(() => {
@@ -557,19 +631,57 @@ function App() {
     return () => window.clearTimeout(timer);
   }, [searchTerm]);
 
-  async function refreshAll() {
-    setLoading(true);
-    setError('');
+  async function loadSocial(asset = socialAsset) {
+    setSocialLoading(true);
     try {
-      // Refresh only the selected ticker. Automatically analyzing every saved
-      // symbol on page load can trigger free-provider rate limits and make
-      // valid tickers appear unavailable.
-      await run(searchTerm || symbol || DEFAULT_SYMBOLS[0], false);
+      const data = await socialIntelligence(asset);
+      setSocialData(data);
     } catch (err) {
-      setError(err.message || 'Unable to refresh the current analysis.');
+      setSocialData({
+        symbol: asset,
+        consensus: 'UNAVAILABLE',
+        score: 50,
+        confidence: 0,
+        qualified_traders: 0,
+        top_traders: [],
+        providers_used: [],
+        message: err.message || 'Social/whale intelligence is temporarily unavailable.',
+      });
     } finally {
-      setLoading(false);
+      setSocialLoading(false);
     }
+  }
+
+  function changeSocialAsset(asset) {
+    setSocialAsset(asset);
+    loadSocial(asset);
+  }
+
+  async function loadVerifiedStrategy(requestedSymbol = symbol) {
+    const clean = String(requestedSymbol || '').toUpperCase().trim();
+    if (!clean) return;
+    setVerifiedStrategyLoading(true);
+    try {
+      const data = await verifiedStrategyIntelligence(clean);
+      setVerifiedStrategyData(data);
+    } catch (err) {
+      setVerifiedStrategyData({
+        symbol: clean,
+        status: 'unavailable',
+        consensus: 'N/A',
+        quality_score: 0,
+        matched_strategies: 0,
+        top_strategies: [],
+        providers_used: [],
+        message: err.message || 'Verified strategy intelligence is temporarily unavailable.',
+      });
+    } finally {
+      setVerifiedStrategyLoading(false);
+    }
+  }
+
+  async function refreshAll() {
+    await run(searchTerm || symbol || DEFAULT_SYMBOLS[0]);
   }
 
   function rememberSymbol(clean) {
@@ -596,10 +708,12 @@ function App() {
     }
   }
 
-  async function run(requestedSymbol = searchTerm || symbol, manageLoading = true) {
+  async function run(requestedSymbol = searchTerm || symbol) {
     const clean = String(requestedSymbol || '').toUpperCase().trim();
-    if (!clean) return;
-    if (manageLoading) setLoading(true);
+    if (!clean || analysisRunning.current) return;
+    analysisRunning.current = true;
+    setLoading(true);
+    setRec(null);
     setSymbol(clean);
     setSearchTerm(clean);
     setSearchOpen(false);
@@ -608,6 +722,7 @@ function App() {
       // Analyze first. The analysis response already contains the verified quote,
       // which avoids three simultaneous Yahoo requests for the same ticker.
       const recommendationData = await analyze(clean, 'auto', analysisSettings);
+      await loadVerifiedStrategy(recommendationData.symbol || clean);
       const quoteData = recommendationData?.raw_data?.quote || null;
       let chainData = [];
 
@@ -640,7 +755,8 @@ function App() {
       setRec(null);
       setError(err.message || `Unable to analyze ${clean}.`);
     } finally {
-      if (manageLoading) setLoading(false);
+      analysisRunning.current = false;
+      setLoading(false);
     }
   }
 
@@ -650,20 +766,9 @@ function App() {
     run(result.symbol);
   }
 
-  function changeAnalysisMode(nextMode) {
-    setAnalysisSettings((previous) => ({ ...previous, analysisMode: nextMode }));
-    // Clear mode-dependent results so an options result is never mistaken for
-    // a stock/auto result (or vice versa) after the selector changes.
-    setRec(null);
-    setRecs([]);
-    setChain([]);
-    setError('');
-  }
-
-  function changeOptionStructure(nextStructure) {
-    setAnalysisSettings((previous) => ({ ...previous, optionStructure: nextStructure }));
-    // Clear the old ticket so a single-leg recommendation cannot remain visible
-    // after switching to Multi Leg (or vice versa).
+  function changeAnalysisSetting(name, value) {
+    if (analysisRunning.current) return;
+    setAnalysisSettings((previous) => ({ ...previous, [name]: value }));
     setRec(null);
     setRecs([]);
     setChain([]);
@@ -728,18 +833,18 @@ function App() {
       {error && <div className="errorBanner"><AlertTriangle size={18} />{error}</div>}
 
       <section className="grid metrics">
-        <Card title="Portfolio Value" icon={<TrendingUp />}>
+        <Card title="Demo Portfolio Value" icon={<TrendingUp />}>
           <b>{money(portfolio?.total_value)}</b>
-          <span>Daily P/L {money(portfolio?.daily_pl || 0)}</span>
+          <span>Daily P/L {money(portfolio?.daily_pl)}</span>
         </Card>
-        <Card title="Buying Power" icon={<ShieldCheck />}>
+        <Card title="Demo Buying Power" icon={<ShieldCheck />}>
           <b>{money(portfolio?.buying_power)}</b>
           <span>Open positions {portfolio?.open_positions || 0}</span>
         </Card>
-        <Card title="AI Confidence" icon={<Brain />}>
-          <b>{rec ? `${rec.confidence}%` : '—'}</b>
+        <Card title="Evidence Score" icon={<Brain />}>
+          <b>{rec ? `${rec.confidence}/100` : '—'}</b>
           <span>{rec ? `${rec.symbol} · ${rec.recommendation === 'NO_TRADE' ? 'No trade' : rec.recommendation}` : 'Run an analysis'}</span>
-          <small className="confidenceClarifier">Evidence alignment · not probability of profit</small>
+          <small className="confidenceClarifier">Heuristic evidence alignment</small>
         </Card>
         <Card title="Risk Mode" icon={<AlertTriangle />}>
           <b>Capital First</b>
@@ -906,7 +1011,8 @@ function App() {
                   role="radio"
                   aria-checked={analysisSettings.analysisMode === mode.value}
                   className={analysisSettings.analysisMode === mode.value ? 'active' : ''}
-                  onClick={() => changeAnalysisMode(mode.value)}
+                  disabled={loading}
+                  onClick={() => changeAnalysisSetting('analysisMode', mode.value)}
                 >
                   <b>{mode.label}</b>
                   <small>{mode.description}</small>
@@ -918,7 +1024,7 @@ function App() {
                 ? 'Options mode is strict: if a verified option chain is unavailable, the result is NO TRADE—not a stock buy or short.'
                 : analysisSettings.analysisMode === 'stock'
                   ? 'Stock mode analyzes shares only and will not generate Call, Put, Vertical Call, or Vertical Put tickets.'
-                  : 'Auto mode evaluates options first and may produce a defined-risk stock setup only when verified options data is unavailable.'}
+                  : 'Auto mode evaluates options first and may produce a stock setup sized to a planned stop only when verified options data is unavailable.'}
             </p>
           </div>
 
@@ -943,7 +1049,8 @@ function App() {
                     role="radio"
                     aria-checked={analysisSettings.optionStructure === structure.value}
                     className={analysisSettings.optionStructure === structure.value ? 'active' : ''}
-                    onClick={() => changeOptionStructure(structure.value)}
+                    disabled={loading}
+                    onClick={() => changeAnalysisSetting('optionStructure', structure.value)}
                   >
                     <b>{structure.label}</b>
                     <small>{structure.description}</small>
@@ -968,20 +1075,16 @@ function App() {
                 min="1000"
                 step="1000"
                 value={analysisSettings.accountValue}
-                onChange={(event) => setAnalysisSettings((previous) => ({
-                  ...previous,
-                  accountValue: Math.max(1000, Number(event.target.value) || 1000),
-                }))}
+                disabled={loading}
+                onChange={(event) => changeAnalysisSetting('accountValue', Math.max(1000, Number(event.target.value) || 1000))}
               />
             </label>
             <label>
               <span>Risk per trade</span>
               <select
                 value={analysisSettings.maxRiskPercent}
-                onChange={(event) => setAnalysisSettings((previous) => ({
-                  ...previous,
-                  maxRiskPercent: Number(event.target.value),
-                }))}
+                disabled={loading}
+                onChange={(event) => changeAnalysisSetting('maxRiskPercent', Number(event.target.value))}
               >
                 <option value="0.5">0.5%</option>
                 <option value="1">1%</option>
@@ -991,19 +1094,17 @@ function App() {
               </select>
             </label>
             <label>
-              <span>Minimum confidence</span>
+              <span>Minimum evidence score</span>
               <select
                 value={analysisSettings.minConfidence}
-                onChange={(event) => setAnalysisSettings((previous) => ({
-                  ...previous,
-                  minConfidence: Number(event.target.value),
-                }))}
+                disabled={loading}
+                onChange={(event) => changeAnalysisSetting('minConfidence', Number(event.target.value))}
               >
-                <option value="65">65%</option>
-                <option value="70">70%</option>
-                <option value="75">75%</option>
-                <option value="80">80%</option>
-                <option value="85">85%</option>
+                <option value="65">65/100</option>
+                <option value="70">70/100</option>
+                <option value="75">75/100</option>
+                <option value="80">80/100</option>
+                <option value="85">85/100</option>
               </select>
             </label>
             <div className="riskBudgetSummary">
@@ -1028,7 +1129,7 @@ function App() {
               </div>
               <div className="quoteFacts">
                 <span><small>Status</small><b>{currentQuote.market_status}</b></span>
-                <span><small>As of</small><b>{formatAsOf(currentQuote.as_of || chartData?.as_of)}</b></span>
+                <span><small>As of</small><b>{formatAsOf(currentQuote.as_of)}</b></span>
                 <span><small>Previous close</small><b>{hasVerifiedQuote(currentQuote) ? money(currentQuote.previous_close) : 'Unavailable'}</b></span>
                 <span><small>Day range</small><b>{hasVerifiedQuote(currentQuote) ? `${money(currentQuote.day_low)} – ${money(currentQuote.day_high)}` : 'Unavailable'}</b></span>
                 <span><small>Volume</small><b>{hasVerifiedQuote(currentQuote) ? currentQuote.volume?.toLocaleString() : 'Unavailable'}</b></span>
@@ -1058,9 +1159,9 @@ function App() {
                   </h2>
                 </div>
                 <div className="confidenceBadge">
-                  <strong>{rec.confidence}%</strong>
+                  <strong>{rec.confidence}/100</strong>
                   <small>Evidence alignment</small>
-                  <small>Threshold {rec.threshold}% · not win probability</small>
+                  <small>Threshold {rec.threshold}/100</small>
                 </div>
               </div>
 
@@ -1075,7 +1176,7 @@ function App() {
                 <span>Options contracts: {rec.raw_data?.options_contract_count ?? 0}</span>
                 <span>Quote source: {currentQuote?.data_source || rec.raw_data?.quote?.data_source || 'unavailable'}</span>
               </div>
-              <SuggestedOrderTicket rec={rec} currentQuote={currentQuote} />
+              <SuggestedOrderTicket rec={rec} />
 
               {rec.risks?.length > 0 && (
                 <details className="analysisDetails">
@@ -1161,6 +1262,26 @@ function App() {
       </section>
 
       <section className="grid two">
+        <SocialWhalePanel
+          data={socialData}
+          asset={socialAsset}
+          onAssetChange={changeSocialAsset}
+          loading={socialLoading}
+        />
+        <VerifiedStrategyPanel
+          data={verifiedStrategyData}
+          symbol={symbol}
+          loading={verifiedStrategyLoading}
+        />
+      </section>
+
+      <section className="grid two">
+        <Card title="Intelligence Controls">
+          <p><b>Invo:</b> Authorized/export JSON only; undocumented app endpoints are not scraped.</p>
+          <p><b>Hyperliquid:</b> Public wallet intelligence only for wallet addresses explicitly configured by the user.</p>
+          <p><b>AlphaLedger:</b> Authorized/export JSON only. Alpha Score, Sharpe, drawdown, track-record length, ownership validation, and audit status are used to judge strategy quality.</p>
+          <p><b>Symbol matching:</b> AlphaLedger changes recommendation confidence only when a qualified strategy explicitly reports current exposure to the same ticker. Generic leaderboard metrics remain informational.</p>
+        </Card>
         <Card title="Risk Center">
           <p>Portfolio risk score: <b>Medium</b></p>
           <p>Max risk per trade: <b>1%</b></p>

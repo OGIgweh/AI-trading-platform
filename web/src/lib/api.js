@@ -1,4 +1,4 @@
-const API = import.meta.env.VITE_API_URL || 'https://ai-trading-platform-vdm6.onrender.com/api';
+const API = import.meta.env.VITE_API_URL || '/api';
 
 async function request(path, options) {
   const res = await fetch(`${API}${path}`, options);
@@ -50,6 +50,15 @@ export function options(symbol) { return request(`/market/options/${encodeURICom
 export function history(symbol, period = '1y') {
   return request(`/market/history/${encodeURIComponent(symbol)}?period=${encodeURIComponent(period)}`);
 }
+
+export function socialIntelligence(symbol = 'BTC') {
+  return request(`/social/intelligence/${encodeURIComponent(symbol)}`);
+}
+
+export function socialProviders() { return request('/social/providers'); }
+
+export function verifiedStrategyIntelligence(symbol) { return request(`/verified-strategy/intelligence/${encodeURIComponent(symbol)}`); }
+export function verifiedStrategyProviders() { return request('/verified-strategy/providers'); }
 
 export function analyze(symbol, strategy = 'auto', settings = DEFAULT_ANALYSIS_SETTINGS) {
   const normalized = normalizeSettings(settings);

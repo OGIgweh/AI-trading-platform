@@ -4,6 +4,10 @@ from datetime import datetime
 from functools import lru_cache
 from typing import Any
 
+import numpy as np
+
+from app.services.market_clock import latest_completed_session, now_et
+
 from app.core.config import settings
 from app.services.market_data import get_price_history, normalize_symbol, is_verified_history_source
 
@@ -25,8 +29,8 @@ def _rsi(close, period: int = 14) -> float | None:
     delta = close.diff()
     gain = delta.clip(lower=0).ewm(alpha=1 / period, adjust=False).mean()
     loss = (-delta.clip(upper=0)).ewm(alpha=1 / period, adjust=False).mean()
-    rs = gain / loss.replace(0, 1e-9)
-    value = 100 - (100 / (1 + rs))
+    value = 100 * gain / (gain + loss)
+    value = value.mask((gain == 0) & (loss == 0), 50)
     if value.empty or value.iloc[-1] != value.iloc[-1]:
         return None
     return round(float(value.iloc[-1]), 2)
@@ -88,7 +92,25 @@ def _technical_cached(symbol: str, cache_bucket: int):
         }
 
     data_source = str(frame.attrs.get("data_source") or "verified_daily")
-    frame = frame.dropna(subset=["Close", "High", "Low", "Volume"])
+    columns = ["Close", "High", "Low", "Volume"]
+    frame = frame.loc[~frame.index.duplicated(keep="last")].sort_index()
+    valid = (
+        np.isfinite(frame[columns]).all(axis=1)
+        & (frame["Low"] > 0)
+        & (frame["Low"] <= frame["Close"])
+        & (frame["Close"] <= frame["High"])
+        & (frame["Volume"] >= 0)
+    )
+    session = latest_completed_session(now_et())
+    frame = frame.loc[valid & (frame.index.date <= session)] if session else frame.iloc[:0]
+    if frame.empty or frame.index[-1].date() != session:
+        return {
+            "symbol": canonical_symbol,
+            "data_source": "stale_history",
+            "history_period": "1y",
+            "history_bars": len(frame),
+            "error": "Verified daily price history is missing the latest completed regular session.",
+        }
     close = frame["Close"]
     if len(close) < 60:
         return {
@@ -103,16 +125,16 @@ def _technical_cached(symbol: str, cache_bucket: int):
     ema9_series = close.ewm(span=9, adjust=False).mean()
     ema21_series = close.ewm(span=21, adjust=False).mean()
     ema50_series = close.ewm(span=50, adjust=False).mean()
-    ema200_series = close.ewm(span=200, adjust=False).mean() if len(close) >= 200 else ema50_series
+    ema200_series = close.ewm(span=200, adjust=False).mean() if len(close) >= 200 else None
     ema9 = float(ema9_series.iloc[-1])
     ema21 = float(ema21_series.iloc[-1])
     ema50 = float(ema50_series.iloc[-1])
-    ema200 = float(ema200_series.iloc[-1])
+    ema200 = round(float(ema200_series.iloc[-1]), 2) if ema200_series is not None else None
     rsi = _rsi(close)
     macd = _macd(close)
     atr = _atr(frame)
     volume = int(frame["Volume"].iloc[-1])
-    average_volume_20 = float(frame["Volume"].tail(20).mean())
+    average_volume_20 = float(frame["Volume"].iloc[-21:-1].mean())
     volume_ratio = round(volume / average_volume_20, 2) if average_volume_20 else 0
     typical_price = (frame["High"] + frame["Low"] + frame["Close"]) / 3
     vwap_20 = float((typical_price * frame["Volume"]).tail(20).sum() / max(frame["Volume"].tail(20).sum(), 1))
@@ -152,7 +174,7 @@ def _technical_cached(symbol: str, cache_bucket: int):
         "ema9": round(ema9, 2),
         "ema21": round(ema21, 2),
         "ema50": round(ema50, 2),
-        "ema200": round(ema200, 2),
+        "ema200": ema200,
         "bollinger_upper": round(bollinger_upper, 2),
         "bollinger_lower": round(bollinger_lower, 2),
         "bollinger_position": bollinger_position,

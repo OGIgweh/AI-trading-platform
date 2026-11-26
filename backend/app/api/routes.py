@@ -13,6 +13,8 @@ from app.services.market_data import (
     provider_status_detail,
 )
 from app.services.portfolio import get_portfolio_summary
+from app.services.social_intelligence import social_intelligence_snapshot, provider_status_detail as social_provider_status
+from app.services.verified_strategy_intelligence import verified_strategy_intelligence_snapshot, provider_status_detail as verified_strategy_provider_status
 
 router = APIRouter()
 
@@ -39,6 +41,26 @@ def market_clock_status():
 @router.get("/market/providers")
 def market_provider_status():
     return provider_status_detail()
+
+
+@router.get("/social/providers")
+def social_provider_status_detail():
+    return social_provider_status()
+
+
+@router.get("/social/intelligence/{symbol}")
+def social_intelligence(symbol: str):
+    return social_intelligence_snapshot(symbol)
+
+
+@router.get("/verified-strategy/providers")
+def verified_strategy_provider_status_detail():
+    return verified_strategy_provider_status()
+
+
+@router.get("/verified-strategy/intelligence/{symbol}")
+def verified_strategy_intelligence(symbol: str):
+    return verified_strategy_intelligence_snapshot(symbol)
 
 
 @router.get("/market/search")

@@ -57,7 +57,7 @@ def score_technical(tech: dict) -> tuple[int, str, list[EvidenceItem], list[str]
     failures: list[str] = []
     ds = tech.get("data_source", "unknown")
     if not is_verified_history_source(ds):
-        failures.append("Verified historical price data is unavailable.")
+        failures.append(tech.get("error") or "Verified historical price data is unavailable.")
         return 0, "NO_TRADE", [
             ev(
                 "Technical",

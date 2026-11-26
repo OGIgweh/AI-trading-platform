@@ -3,7 +3,7 @@ import { SafeAreaView, View, Text, TextInput, TouchableOpacity, ScrollView, Styl
 import * as LocalAuthentication from 'expo-local-authentication';
 import Constants from 'expo-constants';
 
-const API = Constants.expoConfig?.extra?.apiUrl || 'https://ai-trading-platform-vdm6.onrender.com/api';
+const API = process.env.EXPO_PUBLIC_API_URL || Constants.expoConfig?.extra?.apiUrl || 'https://ai-trading-platform-vdm6.onrender.com/api';
 
 async function apiError(response) {
   try {
@@ -36,6 +36,18 @@ async function getPortfolio() {
   return r.json();
 }
 
+async function getSocialIntelligence(symbol = 'BTC') {
+  const r = await fetch(`${API}/social/intelligence/${encodeURIComponent(symbol)}`);
+  if (!r.ok) throw new Error(await apiError(r));
+  return r.json();
+}
+
+async function getVerifiedStrategyIntelligence(symbol) {
+  const r = await fetch(`${API}/verified-strategy/intelligence/${encodeURIComponent(symbol)}`);
+  if (!r.ok) throw new Error(await apiError(r));
+  return r.json();
+}
+
 export default function App() {
   const [authed, setAuthed] = useState(false);
   const [symbol, setSymbol] = useState('AAPL');
@@ -47,6 +59,11 @@ export default function App() {
   const [portfolio, setPortfolio] = useState(null);
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
+  const [socialAsset, setSocialAsset] = useState('BTC');
+  const [socialData, setSocialData] = useState(null);
+  const [socialLoading, setSocialLoading] = useState(false);
+  const [verifiedStrategyData, setVerifiedStrategyData] = useState(null);
+  const [verifiedStrategyLoading, setVerifiedStrategyLoading] = useState(false);
 
   useEffect(() => {
     async function init() {
@@ -60,6 +77,8 @@ export default function App() {
         }
         const p = await getPortfolio();
         setPortfolio(p);
+        setSocialData(await getSocialIntelligence('BTC'));
+        setVerifiedStrategyData(await getVerifiedStrategyIntelligence('AAPL'));
       } catch (e) {
         setError(e.message);
         setAuthed(true);
@@ -93,13 +112,40 @@ export default function App() {
       setLoading(true);
       setError('');
       const clean = requestedSymbol.trim().toUpperCase();
+      setRec(null);
       setSymbol(clean);
       setSearchResults([]);
       setRec(await postAnalyze(clean, assetMode, optionStructure));
+      await loadVerifiedStrategy(clean);
     } catch (e) {
       setError(e.message);
     } finally {
       setLoading(false);
+    }
+  }
+
+  async function loadSocial(asset) {
+    setSocialAsset(asset);
+    setSocialLoading(true);
+    try {
+      setSocialData(await getSocialIntelligence(asset));
+    } catch (e) {
+      setSocialData({ consensus: 'UNAVAILABLE', score: 50, confidence: 0, qualified_traders: 0, message: e.message, top_traders: [] });
+    } finally {
+      setSocialLoading(false);
+    }
+  }
+
+  async function loadVerifiedStrategy(requestedSymbol) {
+    const clean = String(requestedSymbol || '').trim().toUpperCase();
+    if (!clean) return;
+    setVerifiedStrategyLoading(true);
+    try {
+      setVerifiedStrategyData(await getVerifiedStrategyIntelligence(clean));
+    } catch (e) {
+      setVerifiedStrategyData({ symbol: clean, consensus: 'N/A', quality_score: 0, matched_strategies: 0, message: e.message, top_strategies: [] });
+    } finally {
+      setVerifiedStrategyLoading(false);
     }
   }
 
@@ -114,7 +160,7 @@ export default function App() {
         <Text style={styles.muted}>Paper mode · live trading locked · capital preservation first</Text>
         {error ? <Text style={styles.error}>Error: {error}</Text> : null}
         <View style={styles.grid}>
-          <View style={styles.card}><Text style={styles.label}>Portfolio</Text><Text style={styles.big}>${portfolio?.total_value?.toLocaleString() || '10,000'}</Text><Text style={styles.muted}>Daily P/L ${portfolio?.daily_pl ?? '—'}</Text></View>
+          <View style={styles.card}><Text style={styles.label}>Demo Portfolio</Text><Text style={styles.big}>{portfolio ? `$${portfolio.total_value.toLocaleString()}` : 'Unavailable'}</Text><Text style={styles.muted}>Daily P/L ${portfolio?.daily_pl ?? '—'}</Text></View>
           <View style={styles.card}><Text style={styles.label}>Market</Text><Text style={styles.big}>{portfolio?.market_status || '—'}</Text><Text style={styles.muted}>{portfolio?.market_sentiment || 'Neutral'}</Text></View>
         </View>
         <View style={styles.card}>
@@ -138,6 +184,7 @@ export default function App() {
                 const exact = searchResults.find((item) => item.symbol === symbol.trim().toUpperCase());
                 analyze(exact?.symbol || searchResults[0]?.symbol || symbol);
               }}
+              disabled={loading}
               style={styles.btn}
             ><Text style={styles.btnText}>Analyze</Text></TouchableOpacity>
           </View>
@@ -147,7 +194,8 @@ export default function App() {
               <TouchableOpacity
                 key={value}
                 style={[styles.modeButton, assetMode === value && styles.modeButtonActive]}
-                onPress={() => setAssetMode(value)}
+                disabled={loading}
+                onPress={() => { setAssetMode(value); setRec(null); }}
               >
                 <Text style={[styles.modeButtonText, assetMode === value && styles.modeButtonTextActive]}>{label}</Text>
               </TouchableOpacity>
@@ -168,6 +216,7 @@ export default function App() {
                   <TouchableOpacity
                     key={value}
                     style={[styles.modeButton, optionStructure === value && styles.modeButtonActive]}
+                    disabled={loading}
                     onPress={() => { setOptionStructure(value); setRec(null); }}
                   >
                     <Text style={[styles.modeButtonText, optionStructure === value && styles.modeButtonTextActive]}>{label}</Text>
@@ -187,7 +236,7 @@ export default function App() {
           {searchResults.length > 0 ? (
             <View style={styles.searchResults}>
               {searchResults.map((item) => (
-                <TouchableOpacity key={`${item.symbol}-${item.exchange}`} style={styles.searchResult} onPress={() => analyze(item.symbol)}>
+                <TouchableOpacity key={`${item.symbol}-${item.exchange}`} style={styles.searchResult} disabled={loading} onPress={() => analyze(item.symbol)}>
                   <Text style={styles.searchSymbol}>{item.symbol}</Text>
                   <View style={{ flex: 1 }}>
                     <Text numberOfLines={1} style={styles.searchName}>{item.name}</Text>
@@ -200,12 +249,45 @@ export default function App() {
           {loading ? <ActivityIndicator style={{ marginTop: 20 }} /> : null}
           {rec && <View style={rec.recommendation === 'NO_TRADE' ? styles.noTrade : styles.trade}>
             <Text style={styles.result}>{rec.recommendation === 'NO_TRADE' ? 'NO TRADE RECOMMENDED' : `${rec.recommendation} SETUP`}</Text>
-            <Text style={styles.text}>Confidence {rec.confidence}% / {rec.threshold}%</Text>
+            <Text style={styles.text}>Evidence score {rec.confidence}/100 · Threshold {rec.threshold}/100</Text>
             <Text style={styles.text}>{rec.explanation}</Text>
             {rec.risks?.map((r, i) => <Text key={i} style={styles.text}>• {r}</Text>)}
           </View>}
         </View>
-        <View style={styles.card}><Text style={styles.label}>Risk Center</Text><Text style={styles.text}>Max risk per trade: 1%</Text><Text style={styles.text}>Emergency stop: ready</Text><Text style={styles.text}>Broker execution: disabled</Text></View>
+        <View style={styles.card}>
+          <Text style={styles.label}>Social / Whale Intelligence</Text>
+          <View style={styles.modeRow}>
+            {['BTC', 'ETH', 'SOL', 'HYPE', 'ARB'].map((asset) => (
+              <TouchableOpacity key={asset} style={[styles.socialAssetButton, socialAsset === asset && styles.modeButtonActive]} onPress={() => loadSocial(asset)}>
+                <Text style={[styles.modeButtonText, socialAsset === asset && styles.modeButtonTextActive]}>{asset}</Text>
+              </TouchableOpacity>
+            ))}
+          </View>
+          {socialLoading ? <ActivityIndicator style={{ marginTop: 12 }} /> : (
+            <>
+              <Text style={styles.socialConsensus}>{socialData?.consensus || 'UNAVAILABLE'} · {socialData?.score ?? 50}/100</Text>
+              <Text style={styles.text}>Coverage confidence: {socialData?.confidence ?? 0}% · Qualified traders: {socialData?.qualified_traders ?? 0}</Text>
+              <Text style={styles.muted}>{socialData?.message || 'Configure an authorized Invo endpoint or explicit Hyperliquid wallets to populate this signal.'}</Text>
+            </>
+          )}
+        </View>
+        <View style={styles.card}>
+          <Text style={styles.label}>Verified Strategy Intelligence</Text>
+          {verifiedStrategyLoading ? <ActivityIndicator style={{ marginTop: 12 }} /> : (
+            <>
+              <Text style={styles.socialConsensus}>{verifiedStrategyData?.consensus || 'N/A'} · Quality {verifiedStrategyData?.quality_score ?? 0}/100</Text>
+              <Text style={styles.text}>Matched strategies: {verifiedStrategyData?.matched_strategies ?? 0} · Reviewed: {verifiedStrategyData?.strategies_reviewed ?? 0}</Text>
+              <Text style={styles.muted}>{verifiedStrategyData?.message || 'Configure an authorized AlphaLedger JSON endpoint to populate verified strategy intelligence.'}</Text>
+              {(verifiedStrategyData?.top_strategies || []).slice(0, 3).map((strategy, index) => (
+                <View key={`${strategy.alphaledger_id || strategy.strategy_name}-${index}`} style={styles.strategyMiniRow}>
+                  <Text style={styles.text}>{strategy.strategy_name}</Text>
+                  <Text style={styles.muted}>Alpha {Number(strategy.alpha_score || 0).toFixed(0)} · Sharpe {Number(strategy.sharpe_ratio || 0).toFixed(2)} · Max DD {Number(strategy.max_drawdown_percent || 0).toFixed(1)}%</Text>
+                </View>
+              ))}
+            </>
+          )}
+        </View>
+        <View style={styles.card}><Text style={styles.label}>Risk Center</Text><Text style={styles.text}>Max risk per trade: 1%</Text><Text style={styles.text}>Broker execution: disabled</Text></View>
       </ScrollView>
     </SafeAreaView>
   );
@@ -235,6 +317,9 @@ const styles = StyleSheet.create({
   modeButtonText: { color: '#cbd5e1', fontWeight: '800' },
   modeButtonTextActive: { color: '#ffffff' },
   modeHelp: { color: '#94a3b8', fontSize: 12, lineHeight: 17, marginTop: 8 },
+  socialAssetButton: { flex: 1, minWidth: 52, paddingVertical: 9, paddingHorizontal: 6, borderRadius: 10, borderColor: '#334155', borderWidth: 1, backgroundColor: '#0b1020', alignItems: 'center' },
+  socialConsensus: { color: '#fff', fontWeight: '900', fontSize: 19, marginTop: 14 },
+  strategyMiniRow: { marginTop: 10, paddingTop: 10, borderTopColor: '#25314d', borderTopWidth: 1 },
   noTrade: { borderLeftColor: '#f59e0b', borderLeftWidth: 5, backgroundColor: '#1f2937', borderRadius: 12, padding: 14, marginTop: 14 },
   trade: { borderLeftColor: '#22c55e', borderLeftWidth: 5, backgroundColor: '#13251b', borderRadius: 12, padding: 14, marginTop: 14 },
   result: { color: '#fff', fontWeight: '900', fontSize: 18 },

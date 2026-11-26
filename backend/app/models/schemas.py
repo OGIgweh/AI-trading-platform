@@ -1,10 +1,10 @@
-from typing import List, Dict, Optional, Any, Literal
+from typing import List, Dict, Optional, Any, Literal, Annotated
 from pydantic import BaseModel, Field
 
 
 class AnalyzeRequest(BaseModel):
     symbol: str = Field(default="AAPL", min_length=1, max_length=24)
-    account_value: float = Field(default=10000, gt=0)
+    account_value: float = Field(default=10000, gt=0, allow_inf_nan=False)
     asset_mode: Literal["options", "stock", "auto"] = "options"
     option_structure: Literal["auto", "single", "multi"] = "auto"
     strategy: str = "auto"
@@ -13,8 +13,8 @@ class AnalyzeRequest(BaseModel):
 
 
 class RecommendationsRequest(BaseModel):
-    symbols: List[str] = Field(default_factory=lambda: ["AAPL", "MSFT", "NVDA", "SPY", "QQQ"])
-    account_value: float = Field(default=10000, gt=0)
+    symbols: List[Annotated[str, Field(max_length=24)]] = Field(default_factory=lambda: ["AAPL", "MSFT", "NVDA", "SPY", "QQQ"])
+    account_value: float = Field(default=10000, gt=0, allow_inf_nan=False)
     asset_mode: Literal["options", "stock", "auto"] = "options"
     option_structure: Literal["auto", "single", "multi"] = "auto"
     min_confidence: int = Field(default=75, ge=1, le=100)
@@ -42,6 +42,7 @@ class Quote(BaseModel):
     market_status: str
     data_source: str = "sample"
     as_of: Optional[str] = None
+    currency: Optional[str] = None
     previous_close: Optional[float] = None
     day_low: Optional[float] = None
     day_high: Optional[float] = None
@@ -95,6 +96,7 @@ class ScoreBreakdown(BaseModel):
     options_score: int = 0
     market_score: int = 0
     risk_score: int = 0
+    verified_strategy_score: int = 0
     final_confidence: int = 0
     threshold: int = 75
 
